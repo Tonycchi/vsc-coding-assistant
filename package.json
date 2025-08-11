@@ -1,0 +1,50 @@
+{
+  "name": "vsc-coding-assistant",
+  "version": "1.0.0",
+  "description": "This is a custom VS Code AI coding assistant similar like Github Copilot and Cursor, but only using free tools and models.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn src/index.ts",
+    "build": "tsc",
+    "test": "jest",
+    "prepare": "husky install",
+    "format-and-lint": "prettier --write . && eslint . --ext .ts,.js --fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tonycchi/vsc-coding-assistant.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Tonycchi/vsc-coding-assistant/issues"
+  },
+  "homepage": "https://github.com/Tonycchi/vsc-coding-assistant#readme",
+  "volta": {
+    "node": "22.18.0"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.2",
+    "@types/node": "^24.2.1",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jsonc": "^2.20.1",
+    "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^8.0.0",
+    "jiti": "^2.5.1",
+    "lint-staged": "^16.1.5",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,mts,cts,json,jsonc,css,md}": [
+      "prettier --write",
+      "eslint --fix",
+      "git add"
+    ]
+  }
+}
