@@ -18,10 +18,10 @@ jobs:
         run: npm ci
 
       - name: Run Prettier check
-        run: prettier --check .
+        run: npx prettier --check .
 
       - name: Run ESLint
-        run: eslint . --ext .ts,.js
+        run: npx eslint . --ext .ts,.js
 
       - name: Compile TypeScript
         run: npx tsc --noEmit
