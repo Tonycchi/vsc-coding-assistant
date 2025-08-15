@@ -1,0 +1,27 @@
+name: CI
+
+on: pull_request
+
+jobs:
+  build-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Prettier check
+        run: npx prettier --check .
+
+      - name: Run ESLint
+        run: npx eslint . --ext .ts,.js
+
+      - name: Compile TypeScript
+        run: npx tsc --noEmit
