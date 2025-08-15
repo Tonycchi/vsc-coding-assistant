@@ -1,6 +1,6 @@
 # vsc-coding-assistant
 
-![CI](https://github.com/Tonycchi/vsc-coding-assistant/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Tonycchi/vsc-coding-assistant/actions/workflows/ci.yaml/badge.svg)
 
 ## Description
 
