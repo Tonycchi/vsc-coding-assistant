@@ -1,15 +1,17 @@
 {
   "name": "vsc-coding-assistant",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "This is a custom VS Code AI coding assistant similar like Github Copilot and Cursor, but only using free tools and models.",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
+    "type-check": "tsc --noEmit",
     "test": "jest",
     "prepare": "husky install",
-    "format-and-lint": "prettier --write . && eslint . --ext .ts,.js --fix"
+    "format-and-lint": "prettier --write . && eslint . --ext .ts,.js,.cjs --fix"
   },
   "repository": {
     "type": "git",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.2",
+    "@types/jest": "^30.0.0",
     "@types/node": "^24.2.1",
     "@typescript-eslint/eslint-plugin": "^8.39.0",
     "@typescript-eslint/parser": "^8.39.0",
@@ -35,9 +38,11 @@
     "eslint-plugin-jsonc": "^2.20.1",
     "eslint-plugin-prettier": "^5.5.4",
     "husky": "^8.0.0",
+    "jest": "^30.0.5",
     "jiti": "^2.5.1",
     "lint-staged": "^16.1.5",
     "prettier": "^3.6.2",
+    "ts-jest": "^29.4.1",
     "typescript": "^5.9.2"
   },
   "lint-staged": {

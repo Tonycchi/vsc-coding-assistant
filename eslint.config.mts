@@ -5,6 +5,16 @@ import jsonc from 'eslint-plugin-jsonc';
 import jsoncParser from 'jsonc-eslint-parser';
 
 export default [
+  // JavaScript config files
+  {
+    files: ['**/*.{js,mjs,cjs}'],
+    plugins: {
+      prettier: prettierPlugin,
+    },
+    rules: {
+      'prettier/prettier': 'error',
+    },
+  },
   // TypeScript files
   {
     files: ['**/*.{ts,mts,cts,tsx}'],
