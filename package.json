@@ -1,6 +1,6 @@
 {
   "name": "vsc-coding-assistant",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "This is a custom VS Code AI coding assistant similar like Github Copilot and Cursor, but only using free tools and models.",
   "main": "index.js",
   "scripts": {
