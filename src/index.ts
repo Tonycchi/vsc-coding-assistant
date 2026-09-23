@@ -7,4 +7,9 @@ export type {
   ModelRequest,
   ModelResponse,
 } from './models';
-export { buildChatPrompt, CODING_ASSISTANT_SYSTEM_PROMPT } from './services';
+export {
+  buildChatPrompt,
+  CODING_ASSISTANT_SYSTEM_PROMPT,
+  executeChat,
+  toModelMessages,
+} from './services';

@@ -14,7 +14,6 @@ describe('OpenRouterProvider', () => {
 
     await expect(
       provider.complete({
-        model: 'request-model',
         messages: [{ role: 'user', content: 'Hello' }],
       })
     ).resolves.toEqual({ content: 'Assistant response' });
@@ -41,7 +40,7 @@ describe('OpenRouterProvider', () => {
       );
     const provider = new OpenRouterProvider({ apiKey: 'bad-key', model: 'test-model' }, fetchMock);
 
-    await expect(provider.complete({ model: 'test-model', messages: [] })).rejects.toThrow(
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(
       'OpenRouter request failed (401): Invalid API key'
     );
   });
