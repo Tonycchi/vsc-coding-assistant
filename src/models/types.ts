@@ -6,7 +6,6 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
-  model: string;
   messages: ModelMessage[];
 }
 
