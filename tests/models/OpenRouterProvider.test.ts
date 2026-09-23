@@ -45,4 +45,15 @@ describe('OpenRouterProvider', () => {
       'OpenRouter request failed (401): Invalid API key'
     );
   });
+
+  it('returns an actionable error when a failed request is not JSON', async () => {
+    const fetchMock = jest
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('<html>Bad gateway</html>', { status: 502 }));
+    const provider = new OpenRouterProvider({ apiKey: 'test-key', model: 'test-model' }, fetchMock);
+
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(
+      'OpenRouter request failed (502): The provider returned an invalid error response.'
+    );
+  });
 });
