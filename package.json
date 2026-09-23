@@ -15,8 +15,21 @@
       {
         "command": "vscCodingAssistant.openChat",
         "title": "Open Coding Assistant"
+      },
+      {
+        "command": "vscCodingAssistant.setApiKey",
+        "title": "Configure Coding Assistant API Key"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "VSC Coding Assistant",
+      "properties": {
+        "vscCodingAssistant.model": {
+          "type": "string",
+          "description": "OpenRouter model identifier used for chat completions."
+        }
+      }
+    }
   },
   "scripts": {
     "start": "node dist/index.js",
