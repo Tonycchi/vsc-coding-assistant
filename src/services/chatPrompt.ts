@@ -4,8 +4,10 @@ export const CODING_ASSISTANT_SYSTEM_PROMPT =
   'You are a practical coding assistant. Give clear, concise, technically accurate help.';
 
 export function buildChatPrompt(session: ChatSession): ChatMessage[] {
+  const sessionMessages = session.messages.filter(({ role }) => role !== 'system');
+
   return [
     { role: 'system', content: CODING_ASSISTANT_SYSTEM_PROMPT },
-    ...session.messages.map(({ role, content }) => ({ role, content })),
+    ...sessionMessages.map(({ role, content }) => ({ role, content })),
   ];
 }
