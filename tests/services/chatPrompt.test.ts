@@ -26,4 +26,19 @@ describe('buildChatPrompt', () => {
     expect(session.messages).toBe(messages);
     expect(session.messages).toEqual(messages);
   });
+
+  it('replaces session system messages with the canonical prompt', () => {
+    const prompt = buildChatPrompt({
+      id: 'session-1',
+      messages: [
+        { role: 'system', content: 'Conflicting instructions.' },
+        { role: 'user', content: 'Hello' },
+      ],
+    });
+
+    expect(prompt).toEqual([
+      { role: 'system', content: CODING_ASSISTANT_SYSTEM_PROMPT },
+      { role: 'user', content: 'Hello' },
+    ]);
+  });
 });
