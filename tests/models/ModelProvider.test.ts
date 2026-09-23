@@ -3,7 +3,6 @@ import type { ModelProvider, ModelRequest, ModelResponse } from '../../src/model
 describe('ModelProvider', () => {
   it('can be supplied as a test double', async () => {
     const request: ModelRequest = {
-      model: 'test-model',
       messages: [{ role: 'user', content: 'Hello' }],
     };
     const response: ModelResponse = { content: 'Hi there.' };
