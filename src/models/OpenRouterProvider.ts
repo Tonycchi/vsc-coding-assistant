@@ -40,7 +40,18 @@ export class OpenRouterProvider implements ModelProvider {
       }
     );
 
-    const payload = (await response.json()) as OpenRouterResponse;
+    let payload: OpenRouterResponse = {};
+    try {
+      payload = (await response.json()) as OpenRouterResponse;
+    } catch {
+      if (!response.ok) {
+        throw new Error(
+          `OpenRouter request failed (${response.status}): The provider returned an invalid error response.`
+        );
+      }
+
+      throw new Error('OpenRouter response was not valid JSON.');
+    }
 
     if (!response.ok) {
       const message =
