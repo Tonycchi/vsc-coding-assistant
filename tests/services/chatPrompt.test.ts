@@ -17,7 +17,7 @@ describe('buildChatPrompt', () => {
     ]);
   });
 
-  it('includes editor context as a separate JSON system message', () => {
+  it('includes editor context as a separate JSON user message', () => {
     const editorContext = {
       filePath: '/workspace/src/example.ts',
       fileContent: 'const value = 1;',
