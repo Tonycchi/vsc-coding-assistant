@@ -17,6 +17,28 @@ describe('buildChatPrompt', () => {
     ]);
   });
 
+  it('includes editor context as a separate JSON system message', () => {
+    const editorContext = {
+      filePath: '/workspace/src/example.ts',
+      fileContent: 'const value = 1;',
+      selectedText: 'value',
+    };
+
+    expect(
+      buildChatPrompt(
+        { id: 'session-1', messages: [{ role: 'user', content: 'Explain this.' }] },
+        editorContext
+      )
+    ).toEqual([
+      { role: 'system', content: CODING_ASSISTANT_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Current editor context (JSON):\n${JSON.stringify(editorContext)}`,
+      },
+      { role: 'user', content: 'Explain this.' },
+    ]);
+  });
+
   it('does not mutate the session messages', () => {
     const messages = [{ role: 'user' as const, content: 'Hello' }];
     const session = { id: 'session-1', messages };

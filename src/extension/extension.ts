@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 
+import { collectEditorContext } from '../context';
 import type { ModelProvider } from '../models';
 import { OpenRouterProvider } from '../models';
 import { executeChat } from '../services';
@@ -48,6 +49,7 @@ export function activate(
     }
   );
   const disposable = vscode.commands.registerCommand('vscCodingAssistant.openChat', async () => {
+    const editorContext = collectEditorContext(vscode.window.activeTextEditor);
     const prompt = await vscode.window.showInputBox({
       prompt: 'Ask the coding assistant a question',
       placeHolder: 'Explain this function',
@@ -59,7 +61,7 @@ export function activate(
 
     try {
       const configured = dependencies ?? (await configuredDependencies(context));
-      const response = await executeChat(prompt, configured.provider);
+      const response = await executeChat(prompt, configured.provider, editorContext);
       await vscode.window.showInformationMessage(response);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The chat request failed.';

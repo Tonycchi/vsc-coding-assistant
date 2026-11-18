@@ -7,9 +7,7 @@ describe('collectEditorContext', () => {
     const selection = { isEmpty: false } as vscode.Selection;
     const document = {
       uri: { fsPath: '/workspace/src/example.ts' },
-      getText: jest.fn((range?: vscode.Range) =>
-        range ? 'selected code' : 'const value = 1;'
-      ),
+      getText: jest.fn((range?: vscode.Range) => (range ? 'selected code' : 'const value = 1;')),
     } as unknown as vscode.TextDocument;
     const editor = { document, selection } as vscode.TextEditor;
 

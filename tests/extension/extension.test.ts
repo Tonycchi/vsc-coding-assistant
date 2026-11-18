@@ -69,4 +69,49 @@ describe('extension activation', () => {
     expect(showInformationMessage).toHaveBeenCalledWith('It validates input.');
     expect(showErrorMessage).not.toHaveBeenCalled();
   });
+
+  it('sends the active editor context through the chat request', async () => {
+    showInputBox.mockResolvedValue('Explain this function.');
+    const selection = { isEmpty: false } as vscode.Selection;
+    const document = {
+      uri: { fsPath: '/workspace/src/example.ts' },
+      getText: jest.fn((range?: vscode.Range) =>
+        range ? 'return value;' : 'function example() { return value; }'
+      ),
+    } as unknown as vscode.TextDocument;
+    Object.defineProperty(vscode.window, 'activeTextEditor', {
+      configurable: true,
+      value: { document, selection } as vscode.TextEditor,
+    });
+    const provider = {
+      complete: jest.fn().mockResolvedValue({ content: 'It returns a value.' }),
+    } as unknown as ChatCommandDependencies['provider'];
+    const context = { subscriptions: [] } as unknown as vscode.ExtensionContext;
+
+    activate(context, { provider });
+    const handler = registerCommand.mock.calls.at(-1)?.[1] as () => Promise<void>;
+    await handler();
+
+    expect(provider.complete).toHaveBeenCalledWith({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a practical coding assistant. Give clear, concise, technically accurate help.',
+        },
+        {
+          role: 'user',
+          content:
+            'Current editor context (JSON):\n' +
+            JSON.stringify({
+              filePath: '/workspace/src/example.ts',
+              fileContent: 'function example() { return value; }',
+              selectedText: 'return value;',
+            }),
+        },
+        { role: 'user', content: 'Explain this function.' },
+      ],
+    });
+    expect(showInformationMessage).toHaveBeenCalledWith('It returns a value.');
+  });
 });
