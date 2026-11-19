@@ -155,14 +155,44 @@ describe('readWorkspaceFileSafely', () => {
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
-  it('fails closed when descriptor path verification is unsupported', async () => {
-    const { deps, handle } = dependencies('/workspace/src/file.ts');
-    deps.platform = 'darwin';
+  it.each(['darwin', 'win32'])(
+    'fails closed on %s before opening or reading the selected path',
+    async (platform) => {
+      const { deps, handle } = dependencies('/workspace/src/file.ts');
+      deps.platform = platform;
 
-    await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).rejects.toThrow(
-      'Secure file attachments are only supported for local files on Linux.'
+      await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).rejects.toThrow(
+        'Secure file attachments are only supported for local files on Linux.'
+      );
+      expect(deps.open).not.toHaveBeenCalled();
+      expect(handle.readFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it('fails closed for virtual filesystem URIs on Linux', async () => {
+    const { deps, handle } = dependencies('/workspace/src/file.ts');
+    const virtualUri = { ...uri, scheme: 'vscode-remote' } as vscode.Uri;
+
+    await expect(readWorkspaceFileSafely(virtualUri, workspaceFolder, deps)).rejects.toThrow(
+      'This VS Code filesystem cannot safely verify the opened file.'
     );
     expect(deps.open).not.toHaveBeenCalled();
     expect(handle.readFile).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the opened descriptor cannot be resolved through procfs', async () => {
+    const { deps, handle } = dependencies('/workspace/src/file.ts');
+    deps.realpath = jest.fn(async (inputPath) => {
+      if (inputPath.startsWith('/proc/self/fd/')) {
+        throw new Error('procfs unavailable');
+      }
+      return '/workspace';
+    });
+
+    await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).rejects.toThrow(
+      'This Linux environment cannot safely verify the opened file.'
+    );
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });

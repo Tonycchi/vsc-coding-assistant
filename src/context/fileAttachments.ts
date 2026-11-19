@@ -54,7 +54,12 @@ export async function readWorkspaceFileSafely(
     );
   }
 
-  const workspacePath = await dependencies.realpath(workspaceFolder.uri.fsPath);
+  let workspacePath: string;
+  try {
+    workspacePath = await dependencies.realpath(workspaceFolder.uri.fsPath);
+  } catch {
+    throw new SecureAttachmentError('Unable to verify the workspace path for secure attachment.');
+  }
   const fileHandle = await dependencies.open(uri.fsPath, constants.O_RDONLY | constants.O_NOFOLLOW);
 
   try {
@@ -63,7 +68,14 @@ export async function readWorkspaceFileSafely(
       throw new SecureAttachmentError('Only regular files can be attached.');
     }
 
-    const openedFilePath = await dependencies.realpath(`/proc/self/fd/${fileHandle.fd}`);
+    let openedFilePath: string;
+    try {
+      openedFilePath = await dependencies.realpath(`/proc/self/fd/${fileHandle.fd}`);
+    } catch {
+      throw new SecureAttachmentError(
+        'This Linux environment cannot safely verify the opened file. Ensure /proc/self/fd is available.'
+      );
+    }
     const relativePath = path.relative(workspacePath, openedFilePath);
     if (
       relativePath === '..' ||

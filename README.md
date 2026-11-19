@@ -21,6 +21,10 @@ git clone https://github.com/Tonycchi/vsc-coding-assistant.git
 
 The extension checks that the key and model setting are present and structurally valid. OpenRouter reports whether the saved key or selected model is accepted when a request is sent.
 
+### File attachments
+
+Secure workspace file attachments are currently supported on Linux for local `file:` URIs. On macOS, Windows, and virtual or remote filesystems, attachment fails closed because the available VS Code APIs cannot verify the opened file's workspace boundary safely.
+
 Before committing any code, please run the formatter and linter via
 
 ```shell
