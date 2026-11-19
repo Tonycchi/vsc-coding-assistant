@@ -21,10 +21,25 @@ git clone https://github.com/Tonycchi/vsc-coding-assistant.git
 
 The extension checks that the key and model setting are present and structurally valid. OpenRouter reports whether the saved key or selected model is accepted when a request is sent.
 
-Before committing any code, please run the formatter and linter via
+## Development and tests
+
+Use Node.js 22.18.0 (the repository pins this version with Volta), then install the locked dependencies:
+
+```shell
+npm ci
+```
+
+Run the test suite and TypeScript checks with:
+
+```shell
+npm test -- --runInBand
+npm run type-check
+```
+
+Before committing, run the formatter and linter:
 
 ```shell
 npm run format-and-lint
 ```
 
-This ensures that you're code always follows the coding standards. This repository will also run it for you in case you forget it when committing, and on PR there will be a CI that ensures that merged code will always be in the correct form.
+The pre-commit hook runs `lint-staged` on staged files. Pull requests also run the repository CI checks.
