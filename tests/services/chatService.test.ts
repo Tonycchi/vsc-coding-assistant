@@ -35,6 +35,34 @@ describe('executeChat', () => {
       ],
     });
   });
+
+  it('passes editor context through to the model prompt', async () => {
+    const provider = {
+      complete: jest.fn().mockResolvedValue({ content: 'Answer' }),
+    };
+    const editorContext = {
+      filePath: '/workspace/src/example.ts',
+      fileContent: 'const value = 1;',
+      selectedText: 'value',
+    };
+
+    await executeChat('Explain this.', provider, editorContext);
+
+    expect(provider.complete).toHaveBeenCalledWith({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a practical coding assistant. Give clear, concise, technically accurate help.',
+        },
+        {
+          role: 'user',
+          content: `Current editor context (JSON):\n${JSON.stringify(editorContext)}`,
+        },
+        { role: 'user', content: 'Explain this.' },
+      ],
+    });
+  });
 });
 
 describe('createChatSession', () => {
