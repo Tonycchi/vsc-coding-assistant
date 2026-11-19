@@ -8,9 +8,17 @@ describe('ModelProvider', () => {
     const response: ModelResponse = { content: 'Hi there.' };
     const provider: ModelProvider = {
       complete: jest.fn().mockResolvedValue(response),
+      stream: jest.fn(async function* () {
+        yield response.content;
+      }),
     };
 
     await expect(provider.complete(request)).resolves.toEqual(response);
     expect(provider.complete).toHaveBeenCalledWith(request);
+    const chunks: string[] = [];
+    for await (const chunk of provider.stream(request)) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual(['Hi there.']);
   });
 });
