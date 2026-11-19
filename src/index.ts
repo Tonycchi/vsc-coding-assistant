@@ -15,5 +15,6 @@ export {
   createChatSession,
   executeChat,
   executeChatTurn,
+  streamChatTurn,
   toModelMessages,
 } from './services';

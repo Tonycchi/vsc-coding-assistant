@@ -28,6 +28,27 @@ export async function executeChatTurn(
   return response.content;
 }
 
+export async function* streamChatTurn(
+  session: ChatSession,
+  prompt: string,
+  provider: ModelProvider,
+  editorContext?: EditorContext
+): AsyncIterable<string> {
+  session.messages.push({ role: 'user', content: prompt });
+
+  let content = '';
+  const request = {
+    messages: toModelMessages(buildChatPrompt(session, editorContext)),
+  };
+
+  for await (const chunk of provider.stream(request)) {
+    content += chunk;
+    yield chunk;
+  }
+
+  session.messages.push({ role: 'assistant', content });
+}
+
 export async function executeChat(
   prompt: string,
   provider: ModelProvider,
