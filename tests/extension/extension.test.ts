@@ -11,6 +11,7 @@ jest.mock(
       showInputBox: jest.fn(),
       showErrorMessage: jest.fn(),
     },
+    workspace: { getConfiguration: jest.fn() },
   }),
   { virtual: true }
 );
@@ -113,5 +114,63 @@ describe('extension activation', () => {
       ],
     });
     expect(showInformationMessage).toHaveBeenCalledWith('It returns a value.');
+  });
+
+  it('validates and stores a trimmed API key through SecretStorage', async () => {
+    showInputBox.mockResolvedValue('  sk-or-v1-test-key  ');
+    const store = jest.fn();
+    const context = { subscriptions: [], secrets: { store } } as unknown as vscode.ExtensionContext;
+
+    activate(context);
+    const handler = registerCommand.mock.calls[0]?.[1] as () => Promise<void>;
+    await handler();
+
+    const options = showInputBox.mock.calls[0]?.[0] as vscode.InputBoxOptions;
+    expect(options.password).toBe(true);
+    expect(options.validateInput?.('not-a-key')).toBe(
+      'Enter a valid OpenRouter API key beginning with "sk-or-".'
+    );
+    expect(store).toHaveBeenCalledWith('vscCodingAssistant.openrouterApiKey', 'sk-or-v1-test-key');
+    expect(showInformationMessage).toHaveBeenCalledWith('Coding Assistant API key saved securely.');
+  });
+
+  it('reports an invalid model setting without exposing the saved API key', async () => {
+    showInputBox.mockResolvedValue('Explain this function.');
+    const apiKey = 'sk-or-v1-secret-test-key';
+    const getConfiguration = vscode.workspace.getConfiguration as jest.Mock;
+    getConfiguration.mockReturnValue({ get: jest.fn().mockReturnValue('gpt-4o') });
+    const context = {
+      subscriptions: [],
+      secrets: { get: jest.fn().mockResolvedValue(apiKey) },
+    } as unknown as vscode.ExtensionContext;
+
+    activate(context);
+    const handler = registerCommand.mock.calls.at(-1)?.[1] as () => Promise<void>;
+    await handler();
+
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining('provider/model identifier')
+    );
+    expect(showErrorMessage.mock.calls[0]?.[0]).not.toContain(apiKey);
+  });
+
+  it('asks the user to configure a malformed saved API key without exposing it', async () => {
+    showInputBox.mockResolvedValue('Explain this function.');
+    const apiKey = 'malformed-secret-value';
+    const getConfiguration = vscode.workspace.getConfiguration as jest.Mock;
+    getConfiguration.mockReturnValue({ get: jest.fn().mockReturnValue('openai/gpt-4o') });
+    const context = {
+      subscriptions: [],
+      secrets: { get: jest.fn().mockResolvedValue(apiKey) },
+    } as unknown as vscode.ExtensionContext;
+
+    activate(context);
+    const handler = registerCommand.mock.calls.at(-1)?.[1] as () => Promise<void>;
+    await handler();
+
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining('Configure Coding Assistant API Key')
+    );
+    expect(showErrorMessage.mock.calls[0]?.[0]).not.toContain(apiKey);
   });
 });

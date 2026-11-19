@@ -4,6 +4,10 @@ import { collectEditorContext } from '../context';
 import type { ModelProvider } from '../models';
 import { OpenRouterProvider } from '../models';
 import { executeChat } from '../services';
+import {
+  getModelValidationError,
+  getOpenRouterApiKeyValidationError,
+} from './providerConfiguration';
 
 export interface ChatCommandDependencies {
   provider: ModelProvider;
@@ -15,18 +19,24 @@ async function configuredDependencies(
   context: vscode.ExtensionContext
 ): Promise<ChatCommandDependencies> {
   const apiKey = await context.secrets.get(API_KEY_SECRET);
-  const model = vscode.workspace
-    .getConfiguration('vscCodingAssistant')
-    .get<string>('model')
-    ?.trim();
+  const model = vscode.workspace.getConfiguration('vscCodingAssistant').get<unknown>('model');
 
-  if (!apiKey || !model) {
-    throw new Error(
-      'Configure vscCodingAssistant.model and run "Configure Coding Assistant API Key" before starting a chat.'
-    );
+  const apiKeyError = getOpenRouterApiKeyValidationError(apiKey);
+  if (apiKeyError) {
+    throw new Error(`${apiKeyError} Run "Configure Coding Assistant API Key" to save a key.`);
   }
 
-  return { provider: new OpenRouterProvider({ apiKey, model }) };
+  const modelError = getModelValidationError(model);
+  if (modelError) {
+    throw new Error(modelError);
+  }
+
+  return {
+    provider: new OpenRouterProvider({
+      apiKey: (apiKey as string).trim(),
+      model: (model as string).trim(),
+    }),
+  };
 }
 
 export function activate(
@@ -40,10 +50,17 @@ export function activate(
         prompt: 'Enter your OpenRouter API key',
         password: true,
         ignoreFocusOut: true,
+        validateInput: getOpenRouterApiKeyValidationError,
       });
 
-      if (apiKey) {
-        await context.secrets.store(API_KEY_SECRET, apiKey);
+      if (apiKey !== undefined) {
+        const validationError = getOpenRouterApiKeyValidationError(apiKey);
+        if (validationError) {
+          await vscode.window.showErrorMessage(validationError);
+          return;
+        }
+
+        await context.secrets.store(API_KEY_SECRET, apiKey.trim());
         await vscode.window.showInformationMessage('Coding Assistant API key saved securely.');
       }
     }

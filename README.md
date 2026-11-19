@@ -14,6 +14,13 @@ Clone the repository
 git clone https://github.com/Tonycchi/vsc-coding-assistant.git
 ```
 
+### Configure the extension
+
+- Run **Configure Coding Assistant API Key** from the VS Code Command Palette. The API key is stored in VS Code SecretStorage.
+- Set `vscCodingAssistant.model` in VS Code settings to an OpenRouter model identifier in `provider/model` format.
+
+The extension checks that the key and model setting are present and structurally valid. OpenRouter reports whether the saved key or selected model is accepted when a request is sent.
+
 Before committing any code, please run the formatter and linter via
 
 ```shell
