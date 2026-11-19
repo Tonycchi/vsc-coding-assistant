@@ -16,6 +16,7 @@ type ChatViewResponse =
   | { type: 'assistant-start' }
   | { type: 'assistant-chunk'; content: string }
   | { type: 'assistant-complete' }
+  | { type: 'assistant-discard' }
   | { type: 'assistant-error'; content: string }
   | { type: 'loading'; value: boolean };
 
@@ -89,6 +90,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.postMessage({ type: 'assistant-complete' });
     } catch (error) {
       this.currentStreamText = undefined;
+      await this.postMessage({ type: 'assistant-discard' });
       const content = error instanceof Error ? error.message : 'The chat request failed.';
       await this.postMessage({ type: 'assistant-error', content });
     } finally {
@@ -200,6 +202,10 @@ function getChatHtml(): string {
         currentAssistant.textContent += message.content;
       } else if (message.type === 'assistant-complete') {
         currentAssistant = null;
+      } else if (message.type === 'assistant-discard') {
+        currentAssistant?.closest('.message').remove();
+        currentAssistant = null;
+        updateEmptyState();
       } else if (message.type === 'assistant-error' && typeof message.content === 'string') {
         currentAssistant = null;
         addMessage('error', message.content);

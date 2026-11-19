@@ -80,6 +80,36 @@ describe('ChatViewProvider', () => {
     );
   });
 
+  it('discards partial assistant output and keeps failed turns out of history', async () => {
+    const provider: ModelProvider = {
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {
+        yield 'Partial answer';
+        throw new Error('Stream interrupted');
+      }),
+    };
+    const webview = createWebview();
+    const chatView = new ChatViewProvider(async () => provider);
+    chatView.resolveWebviewView(createView(webview));
+    const receiveMessage = getMessageHandler(webview);
+
+    await receiveMessage({ type: 'send', content: 'Question' });
+
+    expect(getPostedMessages(webview)).toEqual(
+      expect.arrayContaining([
+        { type: 'assistant-chunk', content: 'Partial answer' },
+        { type: 'assistant-discard' },
+        { type: 'assistant-error', content: 'Stream interrupted' },
+        { type: 'loading', value: false },
+      ])
+    );
+    expect(webview.html).toContain("currentAssistant?.closest('.message').remove()");
+
+    await receiveMessage({ type: 'ready' });
+    const history = getPostedMessages(webview).filter((message) => message.type === 'history');
+    expect(history.at(-1)?.messages).toEqual([{ role: 'user', content: 'Question' }]);
+  });
+
   it('renders user content with textContent and uses a nonce-based content policy', () => {
     const webview = createWebview();
     const chatView = new ChatViewProvider(async () => ({
