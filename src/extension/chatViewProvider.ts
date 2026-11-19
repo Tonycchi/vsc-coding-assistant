@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 
 import * as vscode from 'vscode';
 
-import { collectEditorContext } from '../context';
+import { collectEditorContext, collectFileAttachments } from '../context';
+import type { FileAttachment } from '../context';
 import type { ModelProvider } from '../models';
 import { createChatSession, streamChatTurn } from '../services';
 import type { ChatMessage } from '../types';
@@ -12,6 +13,10 @@ export const CHAT_VIEW_ID = 'vscCodingAssistant.chatView';
 
 type ChatViewResponse =
   | { type: 'history'; messages: ChatMessage[] }
+  | {
+      type: 'attachments';
+      attachments: Array<Pick<FileAttachment, 'filePath' | 'fileName' | 'sizeBytes'>>;
+    }
   | { type: 'user-message'; content: string }
   | { type: 'assistant-start' }
   | { type: 'assistant-chunk'; content: string }
@@ -25,6 +30,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private isGenerating = false;
   private currentStreamText: string | undefined;
+  private attachments: FileAttachment[] = [];
 
   public constructor(private readonly getProvider: () => Promise<ModelProvider>) {}
 
@@ -56,6 +62,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         type: 'history',
         messages: this.session.messages,
       });
+      await this.postAttachmentMetadata();
       if (this.currentStreamText !== undefined) {
         await this.postMessage({ type: 'assistant-start' });
         if (this.currentStreamText) {
@@ -63,6 +70,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
       await this.postMessage({ type: 'loading', value: this.isGenerating });
+      return;
+    }
+
+    if (message.type === 'attach-files') {
+      if (!this.isGenerating) {
+        await this.attachFiles();
+      }
       return;
     }
 
@@ -81,7 +95,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.postMessage({ type: 'user-message', content: prompt });
       await this.postMessage({ type: 'assistant-start' });
 
-      for await (const chunk of streamChatTurn(this.session, prompt, provider, editorContext)) {
+      for await (const chunk of streamChatTurn(
+        this.session,
+        prompt,
+        provider,
+        editorContext,
+        this.attachments
+      )) {
         this.currentStreamText += chunk;
         await this.postMessage({ type: 'assistant-chunk', content: chunk });
       }
@@ -102,6 +122,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async postMessage(message: ChatViewResponse): Promise<void> {
     await this.view?.webview.postMessage(message);
   }
+
+  private async attachFiles(): Promise<void> {
+    try {
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders?.length) {
+        throw new Error('Open a workspace before attaching files.');
+      }
+
+      const selectedUris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: true,
+        defaultUri: workspaceFolders[0]!.uri,
+        openLabel: 'Attach files',
+      });
+      if (!selectedUris?.length) {
+        return;
+      }
+
+      if (selectedUris.some((uri) => !vscode.workspace.getWorkspaceFolder(uri))) {
+        throw new Error('Choose files inside an open workspace.');
+      }
+
+      const newAttachments = await collectFileAttachments(selectedUris, vscode.workspace.fs);
+      const byPath = new Map(
+        this.attachments.map((attachment) => [attachment.filePath, attachment])
+      );
+      for (const attachment of newAttachments) {
+        byPath.set(attachment.filePath, attachment);
+      }
+      this.attachments = [...byPath.values()];
+      await this.postAttachmentMetadata();
+    } catch (error) {
+      const content =
+        error instanceof Error ? error.message : 'Unable to attach the selected files.';
+      await this.postMessage({ type: 'assistant-error', content });
+    }
+  }
+
+  private async postAttachmentMetadata(): Promise<void> {
+    await this.postMessage({
+      type: 'attachments',
+      attachments: this.attachments.map(({ filePath, fileName, sizeBytes }) => ({
+        filePath,
+        fileName,
+        sizeBytes,
+      })),
+    });
+  }
 }
 
 function getChatHtml(): string {
@@ -118,6 +187,8 @@ function getChatHtml(): string {
     :root { color-scheme: light dark; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
     body { margin: 0; padding: 12px; }
     #messages { display: flex; flex-direction: column; gap: 10px; }
+    #attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .attachment { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.85em; }
     .message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 6px; background: var(--vscode-editor-inactiveSelectionBackground); }
     .message[data-role="user"] { background: var(--vscode-inputOption-activeBackground); }
     .message[data-role="error"] { color: var(--vscode-errorForeground); }
@@ -134,7 +205,9 @@ function getChatHtml(): string {
   <div id="messages" role="log" aria-live="polite"></div>
   <div id="empty">Ask a question to start a conversation.</div>
   <div id="status" role="status" aria-live="polite"></div>
+  <div id="attachments" aria-label="Attached files"></div>
   <form id="chat-form">
+    <button id="attach" type="button">Attach files</button>
     <textarea id="prompt" maxlength="20000" aria-label="Message" placeholder="Ask about your code…"></textarea>
     <button id="send" type="submit">Send</button>
   </form>
@@ -145,6 +218,8 @@ function getChatHtml(): string {
     const status = document.getElementById('status');
     const prompt = document.getElementById('prompt');
     const send = document.getElementById('send');
+    const attach = document.getElementById('attach');
+    const attachments = document.getElementById('attachments');
     let currentAssistant = null;
 
     function updateEmptyState() {
@@ -170,8 +245,25 @@ function getChatHtml(): string {
     function setLoading(value) {
       prompt.disabled = value;
       send.disabled = value;
+      attach.disabled = value;
       status.textContent = value ? 'Assistant is responding…' : '';
     }
+
+    function renderAttachments(items) {
+      attachments.replaceChildren();
+      for (const item of items) {
+        if (!item || typeof item.fileName !== 'string' || typeof item.filePath !== 'string' || !Number.isInteger(item.sizeBytes)) continue;
+        const metadata = document.createElement('span');
+        metadata.className = 'attachment';
+        metadata.textContent = item.fileName + ' (' + item.sizeBytes + ' B)';
+        metadata.title = item.filePath;
+        attachments.append(metadata);
+      }
+    }
+
+    attach.addEventListener('click', () => {
+      if (!attach.disabled) vscode.postMessage({ type: 'attach-files' });
+    });
 
     document.getElementById('chat-form').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -194,6 +286,8 @@ function getChatHtml(): string {
           }
         }
         updateEmptyState();
+      } else if (message.type === 'attachments' && Array.isArray(message.attachments)) {
+        renderAttachments(message.attachments);
       } else if (message.type === 'user-message' && typeof message.content === 'string') {
         addMessage('user', message.content);
       } else if (message.type === 'assistant-start') {

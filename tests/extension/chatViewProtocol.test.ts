@@ -1,8 +1,9 @@
 import { MAX_CHAT_INPUT_LENGTH, parseChatViewMessage } from '../../src/extension/chatViewProtocol';
 
 describe('parseChatViewMessage', () => {
-  it('accepts only the ready and bounded send message shapes', () => {
+  it('accepts ready, attachment, and bounded send message shapes', () => {
     expect(parseChatViewMessage({ type: 'ready' })).toEqual({ type: 'ready' });
+    expect(parseChatViewMessage({ type: 'attach-files' })).toEqual({ type: 'attach-files' });
     expect(parseChatViewMessage({ type: 'send', content: 'Hello' })).toEqual({
       type: 'send',
       content: 'Hello',

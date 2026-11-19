@@ -8,8 +8,8 @@ export interface FileAttachment {
 }
 
 export interface AttachmentFileSystem {
-  stat(uri: vscode.Uri): Promise<{ size: number }>;
-  readFile(uri: vscode.Uri): Promise<Uint8Array>;
+  stat(uri: vscode.Uri): PromiseLike<{ size: number }>;
+  readFile(uri: vscode.Uri): PromiseLike<Uint8Array>;
 }
 
 export const MAX_FILE_ATTACHMENT_SIZE_BYTES = 100_000;
