@@ -145,6 +145,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         throw new Error('Choose files inside an open workspace.');
       }
 
+      for (const uri of selectedUris) {
+        await this.rejectSymlinkPath(uri);
+      }
+
       const newAttachments = await collectFileAttachments(selectedUris, vscode.workspace.fs);
       const byPath = new Map(
         this.attachments.map((attachment) => [attachment.filePath, attachment])
@@ -170,6 +174,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         sizeBytes,
       })),
     });
+  }
+
+  private async rejectSymlinkPath(uri: vscode.Uri): Promise<void> {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder) {
+      throw new Error('Choose files inside an open workspace.');
+    }
+
+    const relativePath = uri.path.slice(workspaceFolder.uri.path.length);
+    let currentUri = workspaceFolder.uri;
+    for (const segment of relativePath.split('/').filter(Boolean)) {
+      currentUri = vscode.Uri.joinPath(currentUri, segment);
+      const stat = await vscode.workspace.fs.stat(currentUri);
+      if ((stat.type & vscode.FileType.SymbolicLink) !== 0) {
+        throw new Error(
+          'Symbolic links cannot be attached. Choose a file stored directly in the workspace.'
+        );
+      }
+    }
   }
 }
 
