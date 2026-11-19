@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 
-import { collectEditorContext } from '../context';
 import type { ModelProvider } from '../models';
 import { OpenRouterProvider } from '../models';
-import { executeChat } from '../services';
 import {
   getModelValidationError,
   getOpenRouterApiKeyValidationError,
 } from './providerConfiguration';
+import { CHAT_VIEW_ID, ChatViewProvider } from './chatViewProvider';
 
 export interface ChatCommandDependencies {
   provider: ModelProvider;
@@ -43,6 +42,14 @@ export function activate(
   context: vscode.ExtensionContext,
   dependencies?: ChatCommandDependencies
 ): void {
+  const chatViewProvider = new ChatViewProvider(async () => {
+    const configured = dependencies ?? (await configuredDependencies(context));
+    return configured.provider;
+  });
+  const viewRegistration = vscode.window.registerWebviewViewProvider(
+    CHAT_VIEW_ID,
+    chatViewProvider
+  );
   const setApiKeyDisposable = vscode.commands.registerCommand(
     'vscCodingAssistant.setApiKey',
     async () => {
@@ -66,27 +73,10 @@ export function activate(
     }
   );
   const disposable = vscode.commands.registerCommand('vscCodingAssistant.openChat', async () => {
-    const editorContext = collectEditorContext(vscode.window.activeTextEditor);
-    const prompt = await vscode.window.showInputBox({
-      prompt: 'Ask the coding assistant a question',
-      placeHolder: 'Explain this function',
-    });
-
-    if (!prompt) {
-      return;
-    }
-
-    try {
-      const configured = dependencies ?? (await configuredDependencies(context));
-      const response = await executeChat(prompt, configured.provider, editorContext);
-      await vscode.window.showInformationMessage(response);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'The chat request failed.';
-      await vscode.window.showErrorMessage(message);
-    }
+    await vscode.commands.executeCommand('workbench.view.extension.vscCodingAssistant');
   });
 
-  context.subscriptions.push(setApiKeyDisposable, disposable);
+  context.subscriptions.push(viewRegistration, setApiKeyDisposable, disposable);
 }
 
 export function deactivate(): void {
