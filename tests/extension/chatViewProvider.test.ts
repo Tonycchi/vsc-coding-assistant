@@ -3,6 +3,16 @@ import type * as vscode from 'vscode';
 import { ChatViewProvider } from '../../src/extension/chatViewProvider';
 import type { ModelProvider } from '../../src/models';
 
+jest.mock('../../src/context/fileAttachments', () => {
+  const actual = jest.requireActual('../../src/context/fileAttachments');
+  return {
+    ...actual,
+    readWorkspaceFileSafely: jest.fn(async () =>
+      new TextEncoder().encode('export const value = 1;')
+    ),
+  };
+});
+
 jest.mock(
   'vscode',
   () => ({

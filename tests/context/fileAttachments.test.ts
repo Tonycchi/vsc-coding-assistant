@@ -3,7 +3,10 @@ import type * as vscode from 'vscode';
 import {
   collectFileAttachments,
   MAX_FILE_ATTACHMENT_SIZE_BYTES,
+  readWorkspaceFileSafely,
+  SecureAttachmentError,
   type AttachmentFileSystem,
+  type SafeWorkspaceFileReaderDependencies,
 } from '../../src/context';
 
 function uri(fsPath: string): vscode.Uri {
@@ -80,6 +83,23 @@ describe('collectFileAttachments', () => {
     );
   });
 
+  it('surfaces secure attachment errors so unsupported platforms can explain the limitation', async () => {
+    const fs: AttachmentFileSystem = {
+      stat: jest.fn().mockResolvedValue({ size: 2 }),
+      readFile: jest
+        .fn()
+        .mockRejectedValue(
+          new SecureAttachmentError(
+            'Secure file attachments are only supported for local files on Linux. This VS Code filesystem cannot safely verify the opened file.'
+          )
+        ),
+    };
+
+    await expect(collectFileAttachments([uri('/workspace/file.txt')], fs)).rejects.toThrow(
+      'Secure file attachments are only supported for local files on Linux.'
+    );
+  });
+
   it('rejects non-UTF-8 content as a text file error', async () => {
     const fs: AttachmentFileSystem = {
       stat: jest.fn().mockResolvedValue({ size: 2 }),
@@ -89,5 +109,60 @@ describe('collectFileAttachments', () => {
     await expect(collectFileAttachments([uri('/workspace/binary.bin')], fs)).rejects.toThrow(
       'Attached file "binary.bin" is not valid UTF-8 text.'
     );
+  });
+});
+
+describe('readWorkspaceFileSafely', () => {
+  const uri = { scheme: 'file', fsPath: '/workspace/link/secrets.txt' } as vscode.Uri;
+  const workspaceFolder = { uri: { fsPath: '/workspace' } } as vscode.WorkspaceFolder;
+
+  function dependencies(openedPath: string) {
+    const handle = {
+      fd: 42,
+      stat: jest.fn().mockResolvedValue({ isFile: () => true }),
+      readFile: jest.fn().mockResolvedValue(new TextEncoder().encode('workspace data')),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    const deps: SafeWorkspaceFileReaderDependencies = {
+      platform: 'linux',
+      open: jest.fn().mockResolvedValue(handle),
+      realpath: jest.fn(async (inputPath) =>
+        inputPath === '/workspace' ? '/workspace' : openedPath
+      ),
+    };
+    return { deps, handle };
+  }
+
+  it('reads from the opened descriptor after confirming its resolved path is inside the workspace', async () => {
+    const { deps, handle } = dependencies('/workspace/src/file.ts');
+
+    await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).resolves.toEqual(
+      new TextEncoder().encode('workspace data')
+    );
+    expect(deps.open).toHaveBeenCalledWith(uri.fsPath, expect.any(Number));
+    expect(deps.realpath).toHaveBeenCalledWith('/proc/self/fd/42');
+    expect(handle.readFile).toHaveBeenCalledTimes(1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a path redirected outside the workspace before reading the opened descriptor', async () => {
+    const { deps, handle } = dependencies('/outside/secrets.txt');
+
+    await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).rejects.toThrow(
+      'The selected file resolves outside the open workspace.'
+    );
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when descriptor path verification is unsupported', async () => {
+    const { deps, handle } = dependencies('/workspace/src/file.ts');
+    deps.platform = 'darwin';
+
+    await expect(readWorkspaceFileSafely(uri, workspaceFolder, deps)).rejects.toThrow(
+      'Secure file attachments are only supported for local files on Linux.'
+    );
+    expect(deps.open).not.toHaveBeenCalled();
+    expect(handle.readFile).not.toHaveBeenCalled();
   });
 });

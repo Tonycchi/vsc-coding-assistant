@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import * as vscode from 'vscode';
 
-import { collectEditorContext, collectFileAttachments } from '../context';
+import { collectEditorContext, collectFileAttachments, readWorkspaceFileSafely } from '../context';
 import type { FileAttachment } from '../context';
 import type { ModelProvider } from '../models';
 import { createChatSession, streamChatTurn } from '../services';
@@ -149,7 +149,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.rejectSymlinkPath(uri);
       }
 
-      const newAttachments = await collectFileAttachments(selectedUris, vscode.workspace.fs);
+      const newAttachments = await collectFileAttachments(selectedUris, {
+        stat: (uri) => vscode.workspace.fs.stat(uri),
+        readFile: (uri) => {
+          const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+          if (!workspaceFolder) {
+            throw new Error('Choose files inside an open workspace.');
+          }
+          return readWorkspaceFileSafely(uri, workspaceFolder);
+        },
+      });
       const byPath = new Map(
         this.attachments.map((attachment) => [attachment.filePath, attachment])
       );

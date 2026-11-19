@@ -1,4 +1,7 @@
 import type * as vscode from 'vscode';
+import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
+import path from 'node:path';
 
 export interface FileAttachment {
   filePath: string;
@@ -13,6 +16,68 @@ export interface AttachmentFileSystem {
 }
 
 export const MAX_FILE_ATTACHMENT_SIZE_BYTES = 100_000;
+
+export class SecureAttachmentError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'SecureAttachmentError';
+  }
+}
+
+interface OpenFileHandle {
+  fd: number;
+  stat(): PromiseLike<{ isFile(): boolean }>;
+  readFile(): PromiseLike<Uint8Array>;
+  close(): PromiseLike<void>;
+}
+
+export interface SafeWorkspaceFileReaderDependencies {
+  platform: string;
+  open(path: string, flags: number): PromiseLike<OpenFileHandle>;
+  realpath(path: string): PromiseLike<string>;
+}
+
+const defaultSafeReaderDependencies: SafeWorkspaceFileReaderDependencies = {
+  platform: process.platform,
+  open: (filePath, flags) => open(filePath, flags),
+  realpath,
+};
+
+export async function readWorkspaceFileSafely(
+  uri: vscode.Uri,
+  workspaceFolder: vscode.WorkspaceFolder,
+  dependencies = defaultSafeReaderDependencies
+): Promise<Uint8Array> {
+  if (dependencies.platform !== 'linux' || uri.scheme !== 'file') {
+    throw new SecureAttachmentError(
+      'Secure file attachments are only supported for local files on Linux. This VS Code filesystem cannot safely verify the opened file.'
+    );
+  }
+
+  const workspacePath = await dependencies.realpath(workspaceFolder.uri.fsPath);
+  const fileHandle = await dependencies.open(uri.fsPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+
+  try {
+    const fileStat = await fileHandle.stat();
+    if (!fileStat.isFile()) {
+      throw new SecureAttachmentError('Only regular files can be attached.');
+    }
+
+    const openedFilePath = await dependencies.realpath(`/proc/self/fd/${fileHandle.fd}`);
+    const relativePath = path.relative(workspacePath, openedFilePath);
+    if (
+      relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      throw new SecureAttachmentError('The selected file resolves outside the open workspace.');
+    }
+
+    return await fileHandle.readFile();
+  } finally {
+    await fileHandle.close();
+  }
+}
 
 export async function collectFileAttachments(
   uris: readonly vscode.Uri[],
@@ -38,7 +103,10 @@ export async function collectFileAttachments(
     let bytes: Uint8Array;
     try {
       bytes = await fileSystem.readFile(uri);
-    } catch {
+    } catch (error) {
+      if (error instanceof SecureAttachmentError) {
+        throw error;
+      }
       throw new Error(`Unable to read attached file "${fileName}".`);
     }
 
