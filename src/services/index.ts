@@ -1,2 +1,2 @@
 export { buildChatPrompt, CODING_ASSISTANT_SYSTEM_PROMPT } from './chatPrompt';
-export { executeChat, toModelMessages } from './chatService';
+export { createChatSession, executeChat, executeChatTurn, toModelMessages } from './chatService';

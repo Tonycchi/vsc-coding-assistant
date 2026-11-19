@@ -10,6 +10,8 @@ export type {
 export {
   buildChatPrompt,
   CODING_ASSISTANT_SYSTEM_PROMPT,
+  createChatSession,
   executeChat,
+  executeChatTurn,
   toModelMessages,
 } from './services';
