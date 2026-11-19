@@ -8,7 +8,8 @@
     "vscode": "^1.90.0"
   },
   "activationEvents": [
-    "onCommand:vscCodingAssistant.openChat"
+    "onCommand:vscCodingAssistant.openChat",
+    "onView:vscCodingAssistant.chatView"
   ],
   "contributes": {
     "commands": [
@@ -29,6 +30,24 @@
           "description": "OpenRouter model identifier used for chat completions (provider/model format, e.g. openai/gpt-4o)."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vscCodingAssistant",
+          "title": "Coding Assistant",
+          "icon": "resources/chat.svg"
+        }
+      ]
+    },
+    "views": {
+      "vscCodingAssistant": [
+        {
+          "type": "webview",
+          "id": "vscCodingAssistant.chatView",
+          "name": "Coding Assistant"
+        }
+      ]
     }
   },
   "scripts": {
