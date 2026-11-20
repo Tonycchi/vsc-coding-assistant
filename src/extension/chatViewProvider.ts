@@ -80,6 +80,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (message.type === 'remove-attachment') {
+      if (!this.isGenerating) {
+        const remaining = this.attachments.filter(({ filePath }) => filePath !== message.filePath);
+        if (remaining.length < this.attachments.length) {
+          this.attachments = remaining;
+          await this.postAttachmentMetadata();
+        }
+      }
+      return;
+    }
+
     const prompt = message.content.trim();
     if (!prompt || this.isGenerating) {
       return;
@@ -220,7 +231,10 @@ function getChatHtml(): string {
     body { margin: 0; padding: 12px; }
     #messages { display: flex; flex-direction: column; gap: 10px; }
     #attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-    .attachment { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.85em; }
+    .attachment { display: flex; align-items: center; max-width: 100%; gap: 4px; padding: 4px 8px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.85em; }
+    .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .remove-attachment { align-self: center; flex: none; padding: 2px 5px; border-radius: 4px; background: transparent; color: inherit; }
+    .remove-attachment:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
     .message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 6px; background: var(--vscode-editor-inactiveSelectionBackground); }
     .message[data-role="user"] { background: var(--vscode-inputOption-activeBackground); }
     .message[data-role="error"] { color: var(--vscode-errorForeground); }
@@ -278,18 +292,45 @@ function getChatHtml(): string {
       prompt.disabled = value;
       send.disabled = value;
       attach.disabled = value;
+      for (const button of attachments.querySelectorAll('button')) {
+        button.disabled = value;
+      }
       status.textContent = value ? 'Assistant is responding…' : '';
     }
 
     function renderAttachments(items) {
+      const previousButtons = Array.from(attachments.querySelectorAll('button'));
+      const focusIndex = previousButtons.indexOf(document.activeElement);
+      const focusedPath = previousButtons[focusIndex]?.dataset.filePath;
       attachments.replaceChildren();
+      const buttons = [];
       for (const item of items) {
         if (!item || typeof item.fileName !== 'string' || typeof item.filePath !== 'string' || !Number.isInteger(item.sizeBytes)) continue;
+        const attachment = document.createElement('span');
+        attachment.className = 'attachment';
         const metadata = document.createElement('span');
-        metadata.className = 'attachment';
+        metadata.className = 'attachment-name';
         metadata.textContent = item.fileName + ' (' + item.sizeBytes + ' B)';
         metadata.title = item.filePath;
-        attachments.append(metadata);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'remove-attachment';
+        remove.dataset.filePath = item.filePath;
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove attachment ' + item.filePath);
+        remove.disabled = attach.disabled;
+        remove.addEventListener('click', () => {
+          if (!remove.disabled) vscode.postMessage({ type: 'remove-attachment', filePath: item.filePath });
+        });
+        buttons.push(remove);
+        attachment.append(metadata, remove);
+        attachments.append(attachment);
+      }
+      if (focusIndex >= 0) {
+        const nextButton = buttons.find((button) => button.dataset.filePath === focusedPath)
+          ?? buttons[Math.min(focusIndex, buttons.length - 1)]
+          ?? attach;
+        nextButton.focus();
       }
     }
 
