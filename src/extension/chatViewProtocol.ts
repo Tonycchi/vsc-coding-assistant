@@ -18,7 +18,6 @@ export function parseChatViewMessage(value: unknown): ChatViewMessage | undefine
   if (message.type === 'attach-files') {
     return { type: 'attach-files' };
   }
-
   if (
     message.type === 'send' &&
     typeof message.content === 'string' &&
