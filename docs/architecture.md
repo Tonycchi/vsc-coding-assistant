@@ -154,6 +154,7 @@ This architecture minimizes complexity while enabling rapid iteration.
 │   │
 │   ├── services
 │   │
+│   ├── tools
 │   ├── types
 │   │
 │   └── utils
@@ -258,6 +259,24 @@ Responsibilities:
 This is where most application logic should live.
 
 ---
+
+## tools
+
+Workspace discovery is independent of chat. The VS Code adapter enumerates a selected
+workspace folder and passes directory entries to the discovery service. The service
+returns workspace-relative paths and kinds. It skips symbolic links, unknown entry
+types, `.git`, and `node_modules`.
+
+Search accepts case-sensitive file names or workspace-relative globs with `*` and
+`?` within a path component and `**` for zero or more directory levels. A bare
+name or pattern matches file names at any depth. Listing sorts by entry name, and
+search visits a directory's files before descending into its subdirectories in
+name order. Both report truncation when they leave results or paths unexamined.
+The default limits are 200 returned entries, 20,000 entries examined, 1,000
+directories visited, and 1,024 characters per relative path. VS Code materializes
+each directory listing as an array. Discovery skips conversion and sorting when
+a listing would exceed the remaining entry budget, reports truncation, and keeps
+results from directories already processed.
 
 ## types
 
