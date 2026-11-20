@@ -2,6 +2,7 @@ import type { EditorContext, FileAttachment } from '../context';
 import type { ModelMessage, ModelProvider } from '../models';
 import type { ChatMessage, ChatSession } from '../types';
 import { buildChatPrompt } from './chatPrompt';
+import { streamRepositoryTools, type RepositoryTool } from './streamRepositoryTools';
 
 export function toModelMessages(messages: ChatMessage[]): ModelMessage[] {
   return messages.map(({ role, content }) => ({ role, content }));
@@ -34,16 +35,15 @@ export async function* streamChatTurn(
   prompt: string,
   provider: ModelProvider,
   editorContext?: EditorContext,
-  attachments: readonly FileAttachment[] = []
+  attachments: readonly FileAttachment[] = [],
+  tools: readonly RepositoryTool[] = []
 ): AsyncIterable<string> {
   session.messages.push({ role: 'user', content: prompt });
 
   let content = '';
-  const request = {
-    messages: toModelMessages(buildChatPrompt(session, editorContext, attachments)),
-  };
+  const messages = toModelMessages(buildChatPrompt(session, editorContext, attachments));
 
-  for await (const chunk of provider.stream(request)) {
+  for await (const chunk of streamRepositoryTools(provider, messages, tools)) {
     content += chunk;
     yield chunk;
   }

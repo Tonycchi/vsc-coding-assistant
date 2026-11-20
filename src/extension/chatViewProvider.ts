@@ -8,6 +8,7 @@ import type { ModelProvider } from '../models';
 import { createChatSession, streamChatTurn } from '../services';
 import type { ChatMessage } from '../types';
 import { parseChatViewMessage } from './chatViewProtocol';
+import { getRepositoryTools } from './repositoryTools';
 
 export const CHAT_VIEW_ID = 'vscCodingAssistant.chatView';
 
@@ -111,7 +112,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         prompt,
         provider,
         editorContext,
-        this.attachments
+        this.attachments,
+        provider.streamWithTools ? getRepositoryTools() : []
       )) {
         this.currentStreamText += chunk;
         await this.postMessage({ type: 'assistant-chunk', content: chunk });

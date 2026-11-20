@@ -175,3 +175,93 @@ describe('OpenRouterProvider', () => {
     );
   });
 });
+
+function event(choice: object): string {
+  return 'data: ' + JSON.stringify({ choices: [choice] }) + '\n\n';
+}
+
+describe('OpenRouter repository tool streaming', () => {
+  it('assembles indexed deltas after completion and serializes structured tool messages', async () => {
+    const response = streamResponse([
+      event({ delta: { content: 'Checking. ' } }),
+      event({
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"pa' },
+            },
+          ],
+        },
+      }),
+      event({
+        delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"src/index.ts"}' } }] },
+      }),
+      event({ delta: {}, finish_reason: 'tool_calls' }),
+      'data: [DONE]\n\n',
+    ]);
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValue(response);
+    const provider = new OpenRouterProvider({ apiKey: 'test-key', model: 'test-model' }, fetchMock);
+    const earlierCall = { id: 'previous', name: 'read_file', arguments: '{"path":"README.md"}' };
+    const definition = { name: 'read_file', description: 'Read', parameters: { type: 'object' } };
+    const output = [];
+
+    for await (const item of provider.streamWithTools({
+      messages: [
+        { role: 'assistant', content: '', toolCalls: [earlierCall] },
+        { role: 'tool', toolCallId: 'previous', content: '{"content":"text"}' },
+      ],
+      tools: [definition],
+      allowToolCalls: true,
+    }))
+      output.push(item);
+
+    expect(output).toEqual([
+      { type: 'text', content: 'Checking. ' },
+      {
+        type: 'tool-calls',
+        calls: [{ id: 'call_1', name: 'read_file', arguments: '{"path":"src/index.ts"}' }],
+      },
+    ]);
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(JSON.parse(String(request?.body))).toEqual({
+      model: 'test-model',
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'previous',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'previous', content: '{"content":"text"}' },
+      ],
+      tools: [{ type: 'function', function: definition }],
+      tool_choice: 'auto',
+      stream: true,
+    });
+  });
+
+  it('rejects incomplete tool calls on stream close', async () => {
+    const response = streamResponse([
+      event({
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{}' } },
+          ],
+        },
+      }),
+    ]);
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValue(response);
+    const provider = new OpenRouterProvider({ apiKey: 'test-key', model: 'test-model' }, fetchMock);
+    const output = provider.streamWithTools({ messages: [], tools: [], allowToolCalls: true });
+
+    await expect(output[Symbol.asyncIterator]().next()).rejects.toThrow('incomplete tool calls');
+  });
+});

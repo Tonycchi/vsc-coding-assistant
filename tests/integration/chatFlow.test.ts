@@ -2,7 +2,10 @@ import * as vscode from 'vscode';
 
 import { activate } from '../../src/extension/extension';
 import { ChatViewProvider } from '../../src/extension/chatViewProvider';
-import type { ModelProvider } from '../../src/models';
+import { createWorkspaceFileReader } from '../../src/extension/workspaceFileReader';
+import type { ModelProvider, ModelToolEvent, ModelToolRequest } from '../../src/models';
+
+jest.mock('../../src/extension/workspaceFileReader');
 
 jest.mock(
   'vscode',
@@ -76,6 +79,91 @@ describe('chat webview integration', () => {
       { role: 'user', content: 'Follow-up' },
       { role: 'assistant', content: 'Second answer' },
     ]);
+  });
+
+  it('runs a registered workspace tool from a sidebar turn and streams the answer', async () => {
+    const configuration = vscode.workspace.getConfiguration as jest.Mock;
+    configuration.mockReturnValue({ get: jest.fn().mockReturnValue(true) });
+    Object.defineProperty(vscode.workspace, 'isTrusted', { configurable: true, value: true });
+    Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+      configurable: true,
+      value: [{ uri: { scheme: 'file' } }],
+    });
+    const reader = jest.fn().mockResolvedValue({
+      kind: 'file',
+      bytes: new TextEncoder().encode('workspace text'),
+      truncated: false,
+    });
+    jest.mocked(createWorkspaceFileReader).mockReturnValue(reader);
+
+    const streamWithTools = jest.fn(async function* (
+      request: ModelToolRequest
+    ): AsyncIterable<ModelToolEvent> {
+      if (request.messages.at(-1)?.role === 'tool') {
+        yield { type: 'text', content: 'Summary of workspace text' };
+        return;
+      }
+      yield {
+        type: 'tool-calls',
+        calls: [{ id: 'read-1', name: 'read_file', arguments: '{"path":"README.md"}' }],
+      };
+    });
+    const provider: ModelProvider = { complete: jest.fn(), stream: jest.fn(), streamWithTools };
+    const { webview, receiveMessage } = registerChatView(provider);
+
+    try {
+      await receiveMessage({ type: 'send', content: 'Summarize the README' });
+      expect(reader).toHaveBeenCalledWith('README.md', 100_000);
+      expect(streamWithTools.mock.calls[0]?.[0].tools.map(({ name }) => name)).toEqual([
+        'read_file',
+        'list_directory',
+        'search_files',
+        'search_text',
+      ]);
+      expect(streamWithTools.mock.calls[1]?.[0].messages.at(-1)).toEqual({
+        role: 'tool',
+        toolCallId: 'read-1',
+        content: JSON.stringify({ path: 'README.md', content: 'workspace text', truncated: false }),
+      });
+      expect(postedMessages(webview)).toEqual(
+        expect.arrayContaining([
+          { type: 'assistant-chunk', content: 'Summary of workspace text' },
+          { type: 'assistant-complete' },
+        ])
+      );
+      await receiveMessage({ type: 'ready' });
+      const histories = postedMessages(webview).filter((message) => message.type === 'history');
+      expect(histories.at(-1)?.messages).toEqual([
+        { role: 'user', content: 'Summarize the README' },
+        { role: 'assistant', content: 'Summary of workspace text' },
+      ]);
+    } finally {
+      Object.defineProperty(vscode.workspace, 'isTrusted', { configurable: true, value: false });
+      Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+        configurable: true,
+        value: undefined,
+      });
+      configuration.mockReset();
+    }
+  });
+
+  it('uses ordinary chat streaming when workspace tools are not enabled', async () => {
+    const streamWithTools = jest.fn();
+    const provider: ModelProvider = {
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {
+        yield 'Plain answer';
+      }),
+      streamWithTools,
+    };
+    const { webview, receiveMessage } = registerChatView(provider);
+
+    await receiveMessage({ type: 'send', content: 'Hello' });
+    expect(streamWithTools).not.toHaveBeenCalled();
+    expect(postedMessages(webview)).toContainEqual({
+      type: 'assistant-chunk',
+      content: 'Plain answer',
+    });
   });
 
   it('clears partial output and keeps failed assistant turns out of session history', async () => {

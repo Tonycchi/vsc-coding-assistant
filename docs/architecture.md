@@ -397,6 +397,16 @@ supported local filesystem so they can verify the opened file before reading its
 
 ---
 
+# Repository Tool Calls
+
+The chat service passes an explicit list of read-only workspace tools to providers with
+streaming tool support. The extension enables this list for a trusted workspace only when the
+user opts in. Each turn bounds the number of tool calls, rounds, and result bytes. Structured
+requests and results stay in the provider messages for the current turn. Session history keeps
+only user messages and visible assistant text.
+
+---
+
 # Testing Strategy
 
 ## Unit Tests
