@@ -83,7 +83,7 @@ describe('chat webview integration', () => {
 
   it('uses the editor and tool workspace selected before the sidebar send awaits', async () => {
     const configuration = vscode.workspace.getConfiguration as jest.Mock;
-    configuration.mockReturnValue({ get: jest.fn().mockReturnValue(true) });
+    configuration.mockReturnValue({ get: jest.fn((key) => key === 'enableRepositoryTools') });
     Object.defineProperty(vscode.workspace, 'isTrusted', { configurable: true, value: true });
     const folders = [
       { uri: { scheme: 'file', fsPath: '/first' } },

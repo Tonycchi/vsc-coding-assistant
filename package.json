@@ -34,6 +34,12 @@
           "default": false,
           "scope": "application",
           "description": "Allow a compatible model to request bounded, read-only file access in trusted workspaces. Tool results are sent to the model provider."
+        },
+        "vscCodingAssistant.enableWorkspaceEdits": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Allow a compatible model to propose workspace edits in trusted local macOS workspaces. Applying a proposal requires your explicit approval."
         }
       }
     },

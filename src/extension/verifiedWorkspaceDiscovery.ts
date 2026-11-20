@@ -3,7 +3,10 @@ import { open, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type * as vscode from 'vscode';
 
-import { loadMacWorkspaceAccess } from '../context/macWorkspaceAccess';
+import {
+  loadMacWorkspaceAccess,
+  type MacWorkspaceRootIdentity,
+} from '../context/macWorkspaceAccess';
 import {
   WorkspaceDiscovery,
   type WorkspaceDirectoryEntry,
@@ -24,7 +27,8 @@ export interface VerifiedDirectoryDependencies {
   readMacDirectory(
     root: string,
     relative: string,
-    maxEntries: number
+    maxEntries: number,
+    expectedMacRoot?: MacWorkspaceRootIdentity
   ): WorkspaceDirectoryEntry[] | undefined;
 }
 
@@ -40,8 +44,16 @@ const defaults: VerifiedDirectoryDependencies = {
       yield { name: entry.name, kind };
     }
   },
-  readMacDirectory: (root, relative, maxEntries) =>
-    loadMacWorkspaceAccess().readWorkspaceDirectory(root, relative, maxEntries),
+  readMacDirectory: (root, relative, maxEntries, expectedMacRoot) =>
+    expectedMacRoot
+      ? loadMacWorkspaceAccess().readWorkspaceDirectory(
+          root,
+          relative,
+          maxEntries,
+          expectedMacRoot.device,
+          expectedMacRoot.inode
+        )
+      : loadMacWorkspaceAccess().readWorkspaceDirectory(root, relative, maxEntries),
 };
 
 function isWithin(root: string, target: string): boolean {
@@ -99,7 +111,8 @@ export function createVerifiedWorkspaceDiscovery(
 
 export function createVerifiedWorkspaceDirectorySource(
   folder: Pick<vscode.WorkspaceFolder, 'uri'>,
-  deps: VerifiedDirectoryDependencies = defaults
+  deps: VerifiedDirectoryDependencies = defaults,
+  expectedMacRoot?: MacWorkspaceRootIdentity
 ): WorkspaceDirectorySource {
   return {
     async readDirectory(components, maxEntries) {
@@ -118,6 +131,17 @@ export function createVerifiedWorkspaceDirectorySource(
         throw new Error('Provide a safe workspace directory and scan limit.');
       }
       try {
+        if (expectedMacRoot) {
+          if (deps.platform !== 'darwin') {
+            throw new Error('The pinned macOS directory reader is unavailable.');
+          }
+          return deps.readMacDirectory(
+            expectedMacRoot.path,
+            components.join('/'),
+            maxEntries,
+            expectedMacRoot
+          );
+        }
         return deps.platform === 'linux'
           ? await readLinuxDirectory(folder.uri.fsPath, components, maxEntries, deps)
           : deps.readMacDirectory(folder.uri.fsPath, components.join('/'), maxEntries);

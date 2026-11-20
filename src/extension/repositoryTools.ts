@@ -55,11 +55,7 @@ export function getRepositoryTools(editor: vscode.TextEditor | undefined): Repos
     return [];
   }
 
-  const activeUri = editor?.document.uri;
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  const folder =
-    (activeUri && vscode.workspace.getWorkspaceFolder(activeUri)) ??
-    (folders.length === 1 ? folders[0] : undefined);
+  const folder = resolveRepositoryWorkspaceFolder(editor);
   if (!folder || folder.uri.scheme !== 'file') {
     return [];
   }
@@ -96,4 +92,15 @@ export function getRepositoryTools(editor: vscode.TextEditor | undefined): Repos
       run: createWorkspaceTextSearch(folder, discovery),
     }),
   ];
+}
+
+export function resolveRepositoryWorkspaceFolder(
+  editor: vscode.TextEditor | undefined
+): vscode.WorkspaceFolder | undefined {
+  const activeUri = editor?.document.uri;
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  return (
+    (activeUri && vscode.workspace.getWorkspaceFolder(activeUri)) ??
+    (folders.length === 1 ? folders[0] : undefined)
+  );
 }

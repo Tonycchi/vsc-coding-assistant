@@ -34,6 +34,15 @@ model supports tool calling. The assistant can request read-only workspace conte
 local macOS and Linux workspaces, and tool results are sent to the configured model provider. When multiple folders
 are open, open a file in the folder you want to use.
 
+### Review workspace edits
+
+Set `vscCodingAssistant.enableWorkspaceEdits` in your user settings to let a compatible
+model propose text edits in a trusted local macOS workspace. The sidebar shows a diff for
+each proposed file. Select **Apply changes** to apply that exact proposal or **Reject** to
+discard it. Sending another message or closing the sidebar view discards the proposal. If the
+proposal expires, a saved file has changed, or an affected editor has unsaved changes, ask
+for a new preview before applying.
+
 ## Development and tests
 
 Use Node.js 22.18.0 (the repository pins this version with Volta), then install the locked dependencies:

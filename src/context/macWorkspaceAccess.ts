@@ -5,17 +5,27 @@ export interface MacWorkspaceDirectoryEntry {
   kind: 'file' | 'directory' | 'unsupported';
 }
 
+export interface MacWorkspaceRootIdentity {
+  path: string;
+  device: bigint;
+  inode: bigint;
+}
+
 interface MacWorkspaceAccess {
   readWorkspaceFile(
     root: string,
     relative: string,
     maxBytes: number,
-    allowPrefix: boolean
+    allowPrefix: boolean,
+    rootDevice?: bigint,
+    rootInode?: bigint
   ): Uint8Array;
   readWorkspaceDirectory(
     root: string,
     relative: string,
-    maxEntries: number
+    maxEntries: number,
+    rootDevice?: bigint,
+    rootInode?: bigint
   ): MacWorkspaceDirectoryEntry[] | undefined;
   applyWorkspaceFile(
     root: string,

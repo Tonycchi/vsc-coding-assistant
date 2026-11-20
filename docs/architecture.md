@@ -445,6 +445,12 @@ same directory handle through publication, so a path change cannot redirect the
 write to a different directory. Coordinate with concurrent writers when working
 in a shared workspace.
 
+The sidebar offers edit proposals only when the user opts in and a trusted workspace
+has a supported writer. The tool creates only a preview. Preview reads and parent
+checks use the same pinned workspace identity as the writer. The extension checks
+open editor buffers again at each write. The proposal ID stays in the sidebar session.
+The next turn or closing the view discards it.
+
 ---
 
 # Testing Strategy
