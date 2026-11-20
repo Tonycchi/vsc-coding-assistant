@@ -423,6 +423,28 @@ reader opens each component without following symbolic links. The diff shows
 line ending and control character changes explicitly. Building a preview
 performs no writes.
 
+## Workspace edit approval
+
+The extension keeps a single immutable preview per approval gate. An opaque ID
+can be consumed only once. Approval checks every file's saved contents before
+starting. Any failure found during those checks stops the batch before the first
+write. Each write also rechecks the file and verifies its permissions and
+metadata before publication. If a later check or write fails, the result lists
+applied, stale, failed, and skipped files. Earlier edits remain applied.
+
+The local macOS writer verifies the pinned workspace identity and opens parent
+directories without following symbolic links. It stages the complete file in
+its parent and publishes it atomically. Creation is exclusive. Replacement
+preserves ordinary permission bits and rejects read-only files, hard links,
+special permission bits, and ownership changes. Files and staging paths with
+extended ACLs, file flags, or extended attributes that cannot be preserved are
+rejected. Linux retains read and preview support. Other platforms and virtual
+providers offer no writes. Independent processes can still modify files or
+move an already verified directory after the final check. The writer holds the
+same directory handle through publication, so a path change cannot redirect the
+write to a different directory. Coordinate with concurrent writers when working
+in a shared workspace.
+
 ---
 
 # Testing Strategy

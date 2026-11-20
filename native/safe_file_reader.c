@@ -7,13 +7,18 @@
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/acl.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #define MAX_SAFE_READ_BYTES (16U * 1024U * 1024U)
 #define MAX_SAFE_DIRECTORY_ENTRIES 20000U
+#define MAX_SAFE_EDIT_BYTES 100000U
 
 static napi_value throw_error(napi_env env, const char *message) {
   napi_throw_error(env, NULL, message);
@@ -389,6 +394,308 @@ static napi_value read_workspace_directory(napi_env env, napi_callback_info info
   return failed ? throw_error(env, "Unable to enumerate the workspace directory safely.") : result;
 }
 
+static bool same_entry(const struct stat *left, const struct stat *right) {
+  return left->st_dev == right->st_dev && left->st_ino == right->st_ino;
+}
+
+static bool contains_git_component(const char *path) {
+  const char *component = path;
+  while (*component != '\0') {
+    const char *end = strchr(component, '/');
+    size_t length = end == NULL ? strlen(component) : (size_t)(end - component);
+    if (length == 4 && strncasecmp(component, ".git", length) == 0) {
+      return true;
+    }
+    if (end == NULL) {
+      return false;
+    }
+    component = end + 1;
+  }
+  return false;
+}
+
+static bool same_file_state(const struct stat *left, const struct stat *right) {
+  return same_entry(left, right) && left->st_size == right->st_size &&
+         left->st_mtimespec.tv_sec == right->st_mtimespec.tv_sec &&
+         left->st_mtimespec.tv_nsec == right->st_mtimespec.tv_nsec &&
+         left->st_ctimespec.tv_sec == right->st_ctimespec.tv_sec &&
+         left->st_ctimespec.tv_nsec == right->st_ctimespec.tv_nsec;
+}
+
+struct edit_metadata {
+  char provenance[128];
+  size_t provenance_length;
+};
+
+static bool read_edit_metadata(int fd, const struct stat *file, struct edit_metadata *metadata) {
+  if (file->st_flags != 0) {
+    return false;
+  }
+
+  acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+  if (acl != NULL) {
+    (void)acl_free(acl);
+    return false;
+  }
+  // Darwin reports ENOENT when the open descriptor has no extended ACL.
+  if (errno != ENOENT) {
+    return false;
+  }
+
+  static const char provenance_name[] = "com.apple.provenance";
+  char attributes[sizeof(provenance_name)];
+  ssize_t length = flistxattr(fd, attributes, sizeof(attributes), 0);
+  if (length == 0) {
+    metadata->provenance_length = 0;
+    return true;
+  }
+  // macOS may attach provenance to new files automatically. All other attributes
+  // are rejected, and provenance on an existing file must match the staged file.
+  if (length != sizeof(provenance_name) || memcmp(attributes, provenance_name, sizeof(attributes)) != 0) {
+    return false;
+  }
+  ssize_t size = fgetxattr(fd, provenance_name, metadata->provenance, sizeof(metadata->provenance), 0, 0);
+  if (size <= 0 || (size_t)size > sizeof(metadata->provenance)) {
+    return false;
+  }
+  metadata->provenance_length = (size_t)size;
+  return true;
+}
+
+static bool verify_edit_directories(int root_fd, int parent_fd, const char *root,
+                                    const char *parent, uint64_t device, uint64_t inode) {
+  struct stat root_stat;
+  char root_path[PATH_MAX], parent_path[PATH_MAX];
+  return fstat(root_fd, &root_stat) == 0 && (uint64_t)root_stat.st_dev == device &&
+         (uint64_t)root_stat.st_ino == inode && fcntl(root_fd, F_GETPATH, root_path) == 0 &&
+         fcntl(parent_fd, F_GETPATH, parent_path) == 0 && strcmp(root_path, root) == 0 &&
+         strcmp(parent_path, parent) == 0;
+}
+
+/* 1 means the exact approved bytes still exist, 0 means stale, -1 means unreadable. */
+static int match_approved_bytes(int parent_fd, const char *name, const char *expected_file,
+                                const uint8_t *before, size_t length, struct stat *matched,
+                                struct edit_metadata *metadata) {
+  int fd = openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  if (fd < 0) {
+    return errno == ENOENT || errno == ELOOP ? 0 : -1;
+  }
+
+  int result = -1;
+  struct stat initial;
+  if (fstat(fd, &initial) != 0) {
+    goto close_file;
+  }
+  if (!S_ISREG(initial.st_mode) || initial.st_size != (off_t)length) {
+    result = 0;
+    goto close_file;
+  }
+  if ((initial.st_mode & S_IWUSR) == 0 || (initial.st_mode & 07000) != 0 || initial.st_nlink != 1 ||
+      !read_edit_metadata(fd, &initial, metadata)) {
+    goto close_file;
+  }
+  char actual_file[PATH_MAX];
+  if (fcntl(fd, F_GETPATH, actual_file) != 0 || strcmp(actual_file, expected_file) != 0) {
+    goto close_file;
+  }
+
+  size_t offset = 0;
+  uint8_t buffer[4096];
+  while (offset < length) {
+    size_t remaining = length - offset;
+    ssize_t count = read(fd, buffer, remaining < sizeof(buffer) ? remaining : sizeof(buffer));
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      goto close_file;
+    }
+    if (count == 0 || memcmp(buffer, before + offset, (size_t)count) != 0) {
+      result = 0;
+      goto close_file;
+    }
+    offset += (size_t)count;
+  }
+  if (fstat(fd, matched) == 0) {
+    result = same_file_state(&initial, matched) ? 1 : 0;
+  }
+
+close_file:
+  close_if_open(fd);
+  return result;
+}
+
+static bool write_edit_bytes(int fd, const uint8_t *bytes, size_t length) {
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t count = write(fd, bytes + offset, length - offset);
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      return false;
+    }
+    offset += (size_t)count;
+  }
+  return true;
+}
+
+static napi_value apply_workspace_file(napi_env env, napi_callback_info info) {
+  size_t argc = 6;
+  napi_value argv[6];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc != 6) {
+    return throw_error(env, "Expected workspace identity, relative path, and approved bytes.");
+  }
+
+  size_t root_length = 0, relative_length = 0, before_length = 0, after_length = 0;
+  char *root_path = read_string(env, argv[0], &root_length);
+  char *relative = read_string(env, argv[3], &relative_length);
+  void *before = NULL, *after = NULL;
+  napi_valuetype before_type;
+  uint64_t root_device = 0, root_inode = 0;
+  bool lossless = false;
+  if (root_path == NULL || relative == NULL || relative[0] == '/' || relative[0] == '\0' ||
+      memchr(root_path, '\0', root_length) != NULL || memchr(relative, '\0', relative_length) != NULL ||
+      contains_git_component(root_path) || contains_git_component(relative) ||
+      napi_get_value_bigint_uint64(env, argv[1], &root_device, &lossless) != napi_ok || !lossless ||
+      napi_get_value_bigint_uint64(env, argv[2], &root_inode, &lossless) != napi_ok || !lossless ||
+      napi_typeof(env, argv[4], &before_type) != napi_ok ||
+      (before_type != napi_null && napi_get_buffer_info(env, argv[4], &before, &before_length) != napi_ok) ||
+      napi_get_buffer_info(env, argv[5], &after, &after_length) != napi_ok ||
+      before_length > MAX_SAFE_EDIT_BYTES || after_length > MAX_SAFE_EDIT_BYTES) {
+    free(root_path);
+    free(relative);
+    return throw_error(env, "Invalid approved workspace edit arguments.");
+  }
+
+  int root_fd = -1, parent_fd = -1, staged_fd = -1;
+  char staged_name[80];
+  const char *result = NULL;
+  const char *parent_components = "";
+  char *name = strrchr(relative, '/');
+  if (name != NULL) {
+    *name++ = '\0';
+    if (relative[0] == '\0') {
+      goto cleanup;
+    }
+    parent_components = relative;
+  } else {
+    name = relative;
+  }
+  if (name[0] == '\0' || strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+    goto cleanup;
+  }
+
+  char expected_parent[PATH_MAX];
+  int parent_length = parent_components[0] == '\0'
+      ? snprintf(expected_parent, sizeof(expected_parent), "%s", root_path)
+      : snprintf(expected_parent, sizeof(expected_parent), "%s%s%s", root_path,
+                 strcmp(root_path, "/") == 0 ? "" : "/", parent_components);
+  if (parent_length < 0 || (size_t)parent_length >= sizeof(expected_parent)) {
+    goto cleanup;
+  }
+  char expected_file[PATH_MAX];
+  int file_length = snprintf(expected_file, sizeof(expected_file), "%s%s%s", expected_parent,
+                             strcmp(expected_parent, "/") == 0 ? "" : "/", name);
+  if (file_length < 0 || (size_t)file_length >= sizeof(expected_file)) {
+    goto cleanup;
+  }
+
+  root_fd = open_workspace_directory(root_path);
+  parent_fd = root_fd >= 0 ? dup(root_fd) : -1;
+  if (parent_fd >= 0 && parent_components[0] != '\0') {
+    parent_fd = open_directory_components(parent_fd, relative);
+  }
+  if (parent_fd < 0 || !verify_edit_directories(root_fd, parent_fd, root_path, expected_parent,
+                                                root_device, root_inode)) {
+    goto cleanup;
+  }
+
+  uint64_t random_parts[2];
+  arc4random_buf(random_parts, sizeof(random_parts));
+  (void)snprintf(staged_name, sizeof(staged_name), ".coding-assistant-edit-%016llx%016llx",
+                 (unsigned long long)random_parts[0], (unsigned long long)random_parts[1]);
+  staged_fd = openat(parent_fd, staged_name,
+                     O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+  struct stat staged;
+  struct edit_metadata staged_metadata;
+  if (staged_fd < 0 || fstat(staged_fd, &staged) != 0 ||
+      !read_edit_metadata(staged_fd, &staged, &staged_metadata) ||
+      !write_edit_bytes(staged_fd, after, after_length) ||
+      !verify_edit_directories(root_fd, parent_fd, root_path, expected_parent, root_device, root_inode)) {
+    goto cleanup;
+  }
+
+  bool create = before_type == napi_null;
+  struct stat matched;
+  struct edit_metadata matched_metadata = {0};
+  if (!create) {
+    int match = match_approved_bytes(parent_fd, name, expected_file, before, before_length,
+                                     &matched, &matched_metadata);
+    if (match == 0) {
+      result = "stale";
+      goto cleanup;
+    }
+    struct stat staged_owner;
+    if (match < 0 || fstat(staged_fd, &staged_owner) != 0 ||
+        staged_owner.st_uid != matched.st_uid || staged_owner.st_gid != matched.st_gid ||
+        fchmod(staged_fd, matched.st_mode & 0777) != 0) {
+      goto cleanup;
+    }
+  }
+
+  struct stat current_staged;
+  if (fsync(staged_fd) != 0 || fstat(staged_fd, &staged) != 0 ||
+      !read_edit_metadata(staged_fd, &staged, &staged_metadata) ||
+      (matched_metadata.provenance_length != 0 &&
+       (matched_metadata.provenance_length != staged_metadata.provenance_length ||
+        memcmp(matched_metadata.provenance, staged_metadata.provenance,
+               matched_metadata.provenance_length) != 0)) ||
+      !verify_edit_directories(root_fd, parent_fd, root_path, expected_parent, root_device, root_inode) ||
+      fstatat(parent_fd, staged_name, &current_staged, AT_SYMLINK_NOFOLLOW) != 0 ||
+      !same_file_state(&staged, &current_staged)) {
+    goto cleanup;
+  }
+
+  if (create) {
+    if (renameatx_np(parent_fd, staged_name, parent_fd, name, RENAME_EXCL) == 0) {
+      result = "applied";
+    } else if (errno == EEXIST) {
+      result = "stale";
+    }
+  } else {
+    struct stat current;
+    int inspected = fstatat(parent_fd, name, &current, AT_SYMLINK_NOFOLLOW);
+    if ((inspected < 0 && errno == ENOENT) || (inspected == 0 && !same_file_state(&matched, &current))) {
+      result = "stale";
+    } else if (inspected == 0 && renameat(parent_fd, staged_name, parent_fd, name) == 0) {
+      result = "applied";
+    }
+  }
+
+cleanup:
+  if (staged_fd >= 0) {
+    struct stat staged, current;
+    if (fstat(staged_fd, &staged) == 0 &&
+        fstatat(parent_fd, staged_name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+        same_entry(&staged, &current)) {
+      (void)unlinkat(parent_fd, staged_name, 0);
+    }
+  }
+  close_if_open(staged_fd);
+  close_if_open(parent_fd);
+  close_if_open(root_fd);
+  free(root_path);
+  free(relative);
+  if (result == NULL) {
+    return throw_error(env, "Unable to apply the approved workspace edit safely.");
+  }
+
+  napi_value status;
+  return napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &status) == napi_ok
+      ? status : NULL;
+}
+
 static napi_value initialize(napi_env env, napi_value exports) {
   napi_value function;
   if (napi_create_function(env, "readWorkspaceFile", NAPI_AUTO_LENGTH,
@@ -396,7 +703,10 @@ static napi_value initialize(napi_env env, napi_value exports) {
       napi_set_named_property(env, exports, "readWorkspaceFile", function) != napi_ok ||
       napi_create_function(env, "readWorkspaceDirectory", NAPI_AUTO_LENGTH,
                            read_workspace_directory, NULL, &function) != napi_ok ||
-      napi_set_named_property(env, exports, "readWorkspaceDirectory", function) != napi_ok) {
+      napi_set_named_property(env, exports, "readWorkspaceDirectory", function) != napi_ok ||
+      napi_create_function(env, "applyWorkspaceFile", NAPI_AUTO_LENGTH,
+                           apply_workspace_file, NULL, &function) != napi_ok ||
+      napi_set_named_property(env, exports, "applyWorkspaceFile", function) != napi_ok) {
     return throw_error(env, "Unable to initialize the secure macOS file reader.");
   }
   return exports;

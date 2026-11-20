@@ -1,6 +1,6 @@
 import { MAX_WORKSPACE_READ_BYTES, type WorkspaceFileReader } from './readFile';
 
-const MAX_FILES = 5;
+export const MAX_WORKSPACE_EDIT_FILES = 5;
 const MAX_PATCH_CHANGES = 20;
 const MAX_DIFF_BYTES = 1_000_000;
 const CONTEXT_LINES = 3;
@@ -33,8 +33,8 @@ export async function previewWorkspaceEdits(
   edits: unknown,
   reader: WorkspaceFileReader
 ): Promise<WorkspaceEditPreview> {
-  if (!Array.isArray(edits) || edits.length === 0 || edits.length > MAX_FILES) {
-    throw new Error(`Provide between 1 and ${MAX_FILES} workspace edits.`);
+  if (!Array.isArray(edits) || edits.length === 0 || edits.length > MAX_WORKSPACE_EDIT_FILES) {
+    throw new Error(`Provide between 1 and ${MAX_WORKSPACE_EDIT_FILES} workspace edits.`);
   }
 
   const validated = Array.from(edits, validateEdit);
