@@ -5,6 +5,7 @@ import {
   type ModelProvider,
   type ModelToolCall,
   type ModelToolDefinition,
+  type ModelToolEvent,
   type ModelToolMessage,
   type ModelToolRequest,
 } from '../models';
@@ -77,23 +78,24 @@ export async function* streamRepositoryTools(
       allowToolCalls: round < MAX_TOOL_ROUNDS && remainingCalls > 0 && remainingBytes > 0,
     };
     let text = '';
-    let calls: ModelToolCall[] | undefined;
+    let batch: Extract<ModelToolEvent, { type: 'tool-calls' }> | undefined;
 
     for await (const event of provider.streamWithTools(request)) {
       if (event.type === 'text') {
         text += event.content;
         yield event.content;
       } else {
-        if (calls) {
+        if (batch) {
           throw new Error('The model returned more than one tool call batch.');
         }
-        calls = event.calls;
+        batch = event;
       }
     }
 
-    if (!calls?.length) {
+    if (!batch?.calls.length) {
       return;
     }
+    const { calls, reasoningDetails } = batch;
     if (!request.allowToolCalls || calls.length > MAX_TOOL_CALLS_PER_BATCH) {
       throw new Error('The model exceeded the repository tool call limit.');
     }
@@ -120,6 +122,15 @@ export async function* streamRepositoryTools(
       results.push({ role: 'tool', toolCallId: call.id, content });
     }
 
-    messages = [...messages, { role: 'assistant', content: text, toolCalls: calls }, ...results];
+    messages = [
+      ...messages,
+      {
+        role: 'assistant',
+        content: text,
+        toolCalls: calls,
+        ...(reasoningDetails ? { reasoningDetails } : {}),
+      },
+      ...results,
+    ];
   }
 }

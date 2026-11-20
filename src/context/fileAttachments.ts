@@ -1,8 +1,8 @@
 import type * as vscode from 'vscode';
 import { constants } from 'node:fs';
-import { createRequire } from 'node:module';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { loadMacWorkspaceAccess } from './macWorkspaceAccess';
 
 export interface FileAttachment {
   filePath: string;
@@ -68,7 +68,6 @@ const defaultSafeReaderDependencies: SafeWorkspaceFileReaderDependencies = {
   realpath,
   readMacWorkspaceFile: loadMacWorkspaceFileReader,
 };
-const requireNativeModule = createRequire(__filename);
 
 export async function readWorkspaceFileSafely(
   uri: vscode.Uri,
@@ -248,18 +247,9 @@ function loadMacWorkspaceFileReader(
   maxBytes: number,
   allowPrefix = false
 ): Uint8Array {
-  let nativeReader: {
-    readWorkspaceFile(
-      root: string,
-      relative: string,
-      byteLimit: number,
-      allowPrefix: boolean
-    ): Uint8Array;
-  };
+  let nativeReader: ReturnType<typeof loadMacWorkspaceAccess>;
   try {
-    nativeReader = requireNativeModule(
-      '../../native/build/Release/safe_file_reader.node'
-    ) as typeof nativeReader;
+    nativeReader = loadMacWorkspaceAccess();
   } catch {
     throw new SecureAttachmentError(
       'The secure macOS file reader is unavailable. Rebuild or reinstall the extension package.',

@@ -14,7 +14,12 @@ export interface ModelToolCall {
 
 export type ModelToolMessage =
   | ModelMessage
-  | { role: 'assistant'; content: string; toolCalls: ModelToolCall[] }
+  | {
+      role: 'assistant';
+      content: string;
+      toolCalls: ModelToolCall[];
+      reasoningDetails?: readonly unknown[];
+    }
   | { role: 'tool'; content: string; toolCallId: string };
 
 export interface ModelToolRequest {
@@ -25,7 +30,7 @@ export interface ModelToolRequest {
 
 export type ModelToolEvent =
   | { type: 'text'; content: string }
-  | { type: 'tool-calls'; calls: ModelToolCall[] };
+  | { type: 'tool-calls'; calls: ModelToolCall[]; reasoningDetails?: readonly unknown[] };
 
 export const MAX_TOOL_CALLS_PER_BATCH = 6;
 export const MAX_TOOL_ARGUMENT_BYTES = 8_192;

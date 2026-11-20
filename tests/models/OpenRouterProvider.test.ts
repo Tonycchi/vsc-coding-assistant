@@ -181,9 +181,14 @@ function event(choice: object): string {
 }
 
 describe('OpenRouter repository tool streaming', () => {
-  it('assembles indexed deltas after completion and serializes structured tool messages', async () => {
+  it('assembles indexed deltas and forwards reasoning blocks in stream order', async () => {
+    const reasoningDetails = [
+      { type: 'reasoning.text', text: 'A reasoning block', index: 0 },
+      { type: 'reasoning.encrypted', data: 'opaque-data', index: 1 },
+    ];
     const response = streamResponse([
-      event({ delta: { content: 'Checking. ' } }),
+      event({ delta: { reasoning_details: [reasoningDetails[0]] } }),
+      event({ delta: { content: 'Checking. ', reasoning_details: [reasoningDetails[1]] } }),
       event({
         delta: {
           tool_calls: [
@@ -210,7 +215,7 @@ describe('OpenRouter repository tool streaming', () => {
 
     for await (const item of provider.streamWithTools({
       messages: [
-        { role: 'assistant', content: '', toolCalls: [earlierCall] },
+        { role: 'assistant', content: '', toolCalls: [earlierCall], reasoningDetails },
         { role: 'tool', toolCallId: 'previous', content: '{"content":"text"}' },
       ],
       tools: [definition],
@@ -222,6 +227,7 @@ describe('OpenRouter repository tool streaming', () => {
       { type: 'text', content: 'Checking. ' },
       {
         type: 'tool-calls',
+        reasoningDetails,
         calls: [{ id: 'call_1', name: 'read_file', arguments: '{"path":"src/index.ts"}' }],
       },
     ]);
@@ -232,6 +238,7 @@ describe('OpenRouter repository tool streaming', () => {
         {
           role: 'assistant',
           content: null,
+          reasoning_details: reasoningDetails,
           tool_calls: [
             {
               id: 'previous',
@@ -246,6 +253,27 @@ describe('OpenRouter repository tool streaming', () => {
       tool_choice: 'auto',
       stream: true,
     });
+  });
+
+  it('rejects an oversized reasoning handoff before returning tool calls', async () => {
+    const response = streamResponse([
+      event({
+        delta: { reasoning_details: [{ type: 'reasoning.text', text: 'x'.repeat(128_000) }] },
+      }),
+      event({
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'call_1', function: { name: 'read_file', arguments: '{}' } },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      }),
+    ]);
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValue(response);
+    const provider = new OpenRouterProvider({ apiKey: 'test-key', model: 'test-model' }, fetchMock);
+
+    const output = provider.streamWithTools({ messages: [], tools: [], allowToolCalls: true });
+    await expect(output[Symbol.asyncIterator]().next()).rejects.toThrow('oversized reasoning');
   });
 
   it('rejects incomplete tool calls on stream close', async () => {

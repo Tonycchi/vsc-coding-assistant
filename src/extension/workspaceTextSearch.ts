@@ -3,8 +3,10 @@ import { searchWorkspaceText } from '../tools/workspaceTextSearch';
 import { createWorkspaceDiscovery } from './workspaceDiscoverySource';
 import { createWorkspaceFileReader } from './workspaceFileReader';
 
-export function createWorkspaceTextSearch(workspaceFolder: vscode.WorkspaceFolder) {
-  const discovery = createWorkspaceDiscovery(workspaceFolder);
+export function createWorkspaceTextSearch(
+  workspaceFolder: vscode.WorkspaceFolder,
+  discovery = createWorkspaceDiscovery(workspaceFolder)
+) {
   const reader = createWorkspaceFileReader(workspaceFolder);
   return async (query: string) => {
     if (workspaceFolder.uri.scheme !== 'file') {

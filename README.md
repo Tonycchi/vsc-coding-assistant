@@ -31,7 +31,7 @@ Secure workspace file attachments are supported on Linux and macOS for local `fi
 
 Set `vscCodingAssistant.enableRepositoryTools` in your user settings if your OpenRouter
 model supports tool calling. The assistant can request read-only workspace context in trusted
-workspaces, and tool results are sent to the configured model provider. When multiple folders
+local macOS and Linux workspaces, and tool results are sent to the configured model provider. When multiple folders
 are open, open a file in the folder you want to use.
 
 ## Development and tests

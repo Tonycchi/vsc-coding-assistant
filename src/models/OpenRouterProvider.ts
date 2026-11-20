@@ -17,13 +17,16 @@ export interface OpenRouterConfig {
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+const MAX_REASONING_BYTES = 128_000;
+const MAX_REASONING_BLOCKS = 4_096;
+
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: unknown } }>;
   error?: { message?: unknown };
 }
 
 interface OpenRouterStreamChoice {
-  delta?: { content?: unknown; tool_calls?: unknown };
+  delta?: { content?: unknown; tool_calls?: unknown; reasoning_details?: unknown };
   finish_reason?: unknown;
 }
 
@@ -153,6 +156,7 @@ function toWireToolMessage(message: ModelToolMessage) {
       role: message.role,
       content: message.content || null,
       tool_calls: message.toolCalls.map(toWireToolCall),
+      ...(message.reasoningDetails ? { reasoning_details: message.reasoningDetails } : {}),
     };
   }
   return message;
@@ -260,6 +264,9 @@ export class OpenRouterProvider implements ModelProvider {
   public async *streamWithTools(request: ModelToolRequest): AsyncIterable<ModelToolEvent> {
     const calls = new Map<number, ModelToolCall>();
     let finishedToolCalls = false;
+    let reasoningDetails: unknown[] = [];
+    let reasoningBytes = 0;
+    let invalidReasoning = false;
 
     for await (const choice of this.streamChoices({
       messages: request.messages.map(toWireToolMessage),
@@ -271,6 +278,25 @@ export class OpenRouterProvider implements ModelProvider {
         yield { type: 'text', content };
       }
 
+      const reasoning = choice.delta?.reasoning_details;
+      if (request.allowToolCalls && !invalidReasoning && reasoning != null) {
+        if (
+          !Array.isArray(reasoning) ||
+          reasoning.length + reasoningDetails.length > MAX_REASONING_BLOCKS
+        ) {
+          invalidReasoning = true;
+        } else {
+          reasoningBytes += Buffer.byteLength(JSON.stringify(reasoning));
+          if (reasoningBytes > MAX_REASONING_BYTES) {
+            invalidReasoning = true;
+          } else {
+            reasoningDetails.push(...reasoning);
+          }
+        }
+        if (invalidReasoning) {
+          reasoningDetails = [];
+        }
+      }
       const deltas = choice.delta?.tool_calls;
       if (deltas !== undefined && deltas !== null) {
         if (finishedToolCalls || !request.allowToolCalls) {
@@ -295,7 +321,14 @@ export class OpenRouterProvider implements ModelProvider {
       ) {
         throw new Error('OpenRouter returned incomplete tool calls.');
       }
-      yield { type: 'tool-calls', calls: ordered.map(([, call]) => call) };
+      if (invalidReasoning) {
+        throw new Error('OpenRouter returned invalid or oversized reasoning for tool calls.');
+      }
+      yield {
+        type: 'tool-calls',
+        calls: ordered.map(([, call]) => call),
+        ...(reasoningDetails.length > 0 ? { reasoningDetails } : {}),
+      };
     }
   }
 

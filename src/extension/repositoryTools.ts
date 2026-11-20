@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import type { RepositoryTool } from '../services/streamRepositoryTools';
 import { readFile } from '../tools/readFile';
-import { createWorkspaceDiscovery } from './workspaceDiscoverySource';
+import { createVerifiedWorkspaceDiscovery } from './verifiedWorkspaceDiscovery';
 import { createWorkspaceFileReader } from './workspaceFileReader';
 import { createWorkspaceTextSearch } from './workspaceTextSearch';
 
@@ -44,8 +44,9 @@ function stringTool(options: StringToolOptions): RepositoryTool {
   };
 }
 
-export function getRepositoryTools(): RepositoryTool[] {
+export function getRepositoryTools(editor: vscode.TextEditor | undefined): RepositoryTool[] {
   if (
+    !['linux', 'darwin'].includes(process.platform) ||
     !vscode.workspace.isTrusted ||
     vscode.workspace
       .getConfiguration('vscCodingAssistant')
@@ -54,7 +55,7 @@ export function getRepositoryTools(): RepositoryTool[] {
     return [];
   }
 
-  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const activeUri = editor?.document.uri;
   const folders = vscode.workspace.workspaceFolders ?? [];
   const folder =
     (activeUri && vscode.workspace.getWorkspaceFolder(activeUri)) ??
@@ -64,7 +65,7 @@ export function getRepositoryTools(): RepositoryTool[] {
   }
 
   const reader = createWorkspaceFileReader(folder);
-  const discovery = createWorkspaceDiscovery(folder);
+  const discovery = createVerifiedWorkspaceDiscovery(folder);
   return [
     stringTool({
       name: 'read_file',
@@ -92,7 +93,7 @@ export function getRepositoryTools(): RepositoryTool[] {
       description: 'Find literal text in visible workspace files and return matching lines.',
       argument: 'query',
       argumentDescription: 'Case-sensitive text to find, without line breaks',
-      run: createWorkspaceTextSearch(folder),
+      run: createWorkspaceTextSearch(folder, discovery),
     }),
   ];
 }

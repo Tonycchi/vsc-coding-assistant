@@ -18,7 +18,7 @@ jest.mock(
       showInformationMessage: jest.fn(),
       showInputBox: jest.fn(),
     },
-    workspace: { getConfiguration: jest.fn() },
+    workspace: { getConfiguration: jest.fn(), getWorkspaceFolder: jest.fn() },
   }),
   { virtual: true }
 );
@@ -81,14 +81,34 @@ describe('chat webview integration', () => {
     ]);
   });
 
-  it('runs a registered workspace tool from a sidebar turn and streams the answer', async () => {
+  it('uses the editor and tool workspace selected before the sidebar send awaits', async () => {
     const configuration = vscode.workspace.getConfiguration as jest.Mock;
     configuration.mockReturnValue({ get: jest.fn().mockReturnValue(true) });
     Object.defineProperty(vscode.workspace, 'isTrusted', { configurable: true, value: true });
+    const folders = [
+      { uri: { scheme: 'file', fsPath: '/first' } },
+      { uri: { scheme: 'file', fsPath: '/second' } },
+    ];
     Object.defineProperty(vscode.workspace, 'workspaceFolders', {
       configurable: true,
-      value: [{ uri: { scheme: 'file' } }],
+      value: folders,
     });
+    const editors = folders.map(({ uri }) => ({
+      document: {
+        uri: { scheme: 'file', fsPath: uri.fsPath + '/index.ts' },
+        getText: () => uri.fsPath + ' editor context',
+      },
+      selection: { isEmpty: true },
+    }));
+    Object.defineProperty(vscode.window, 'activeTextEditor', {
+      configurable: true,
+      writable: true,
+      value: editors[0],
+    });
+    const getWorkspaceFolder = vscode.workspace.getWorkspaceFolder as jest.Mock;
+    getWorkspaceFolder.mockImplementation((uri) =>
+      folders.find((folder) => uri.fsPath.startsWith(folder.uri.fsPath + '/'))
+    );
     const reader = jest.fn().mockResolvedValue({
       kind: 'file',
       bytes: new TextEncoder().encode('workspace text'),
@@ -111,8 +131,22 @@ describe('chat webview integration', () => {
     const provider: ModelProvider = { complete: jest.fn(), stream: jest.fn(), streamWithTools };
     const { webview, receiveMessage } = registerChatView(provider);
 
+    jest.mocked(webview.postMessage).mockImplementation(async (message) => {
+      if (message.type === 'loading' && message.value) {
+        Object.defineProperty(vscode.window, 'activeTextEditor', { value: editors[1] });
+      }
+      return true;
+    });
     try {
       await receiveMessage({ type: 'send', content: 'Summarize the README' });
+      expect(getWorkspaceFolder).toHaveBeenCalledTimes(1);
+      expect(getWorkspaceFolder).toHaveBeenCalledWith(editors[0]?.document.uri);
+      expect(createWorkspaceFileReader).toHaveBeenCalledWith(folders[0]);
+      expect(createWorkspaceFileReader).not.toHaveBeenCalledWith(folders[1]);
+      expect(streamWithTools.mock.calls[0]?.[0].messages).toContainEqual({
+        role: 'user',
+        content: expect.stringContaining('/first editor context'),
+      });
       expect(reader).toHaveBeenCalledWith('README.md', 100_000);
       expect(streamWithTools.mock.calls[0]?.[0].tools.map(({ name }) => name)).toEqual([
         'read_file',
@@ -143,6 +177,8 @@ describe('chat webview integration', () => {
         configurable: true,
         value: undefined,
       });
+      Object.defineProperty(vscode.window, 'activeTextEditor', { value: undefined });
+      getWorkspaceFolder.mockReset();
       configuration.mockReset();
     }
   });

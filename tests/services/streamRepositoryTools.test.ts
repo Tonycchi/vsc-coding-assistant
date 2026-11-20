@@ -36,8 +36,9 @@ async function collect(items: AsyncIterable<string>): Promise<string[]> {
 describe('repository tools in chat', () => {
   it('streams a final response from tool results and keeps protocol messages off session history', async () => {
     const call = toolCall('call1');
+    const reasoningDetails = [{ type: 'reasoning.summary', summary: 'opaque' }];
     const { provider, streamWithTools } = scriptedProvider([
-      [{ type: 'tool-calls', calls: [call] }],
+      [{ type: 'tool-calls', calls: [call], reasoningDetails }],
       [
         { type: 'text', content: 'Final ' },
         { type: 'text', content: 'answer' },
@@ -51,7 +52,7 @@ describe('repository tools in chat', () => {
     ).resolves.toEqual(['Final ', 'answer']);
     expect(tool.run).toHaveBeenCalledWith({ path: 'src/index.ts' });
     expect(streamWithTools.mock.calls[1]?.[0].messages.slice(-2)).toEqual([
-      { role: 'assistant', content: '', toolCalls: [call] },
+      { role: 'assistant', content: '', toolCalls: [call], reasoningDetails },
       { role: 'tool', toolCallId: 'call1', content: '{"content":"workspace text"}' },
     ]);
     expect(session.messages).toEqual([

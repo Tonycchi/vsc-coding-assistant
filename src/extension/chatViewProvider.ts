@@ -98,11 +98,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     this.isGenerating = true;
-    await this.postMessage({ type: 'loading', value: true });
-
     try {
+      const editor = vscode.window.activeTextEditor;
+      const editorContext = collectEditorContext(editor);
+      const tools = getRepositoryTools(editor);
+      await this.postMessage({ type: 'loading', value: true });
+
       const provider = await this.getProvider();
-      const editorContext = collectEditorContext(vscode.window.activeTextEditor);
       this.currentStreamText = '';
       await this.postMessage({ type: 'user-message', content: prompt });
       await this.postMessage({ type: 'assistant-start' });
@@ -113,7 +115,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         provider,
         editorContext,
         this.attachments,
-        provider.streamWithTools ? getRepositoryTools() : []
+        tools
       )) {
         this.currentStreamText += chunk;
         await this.postMessage({ type: 'assistant-chunk', content: chunk });
