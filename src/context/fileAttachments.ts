@@ -19,8 +19,18 @@ export interface AttachmentFileSystem {
 export const MAX_FILE_ATTACHMENT_SIZE_BYTES = 100_000;
 export const MAX_SAFE_WORKSPACE_READ_BYTES = 16 * 1024 * 1024;
 
+export type SafeWorkspaceFileErrorCode =
+  | 'missing'
+  | 'not-file'
+  | 'outside-workspace'
+  | 'unsupported-filesystem'
+  | 'unreadable';
+
 export class SecureAttachmentError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly code: SafeWorkspaceFileErrorCode = 'unreadable'
+  ) {
     super(message);
     this.name = 'SecureAttachmentError';
   }
@@ -44,7 +54,12 @@ export interface SafeWorkspaceFileReaderDependencies {
   platform: string;
   open(path: string, flags: number): PromiseLike<OpenFileHandle>;
   realpath(path: string): PromiseLike<string>;
-  readMacWorkspaceFile?(workspacePath: string, relativePath: string, maxBytes: number): Uint8Array;
+  readMacWorkspaceFile?(
+    workspacePath: string,
+    relativePath: string,
+    maxBytes: number,
+    allowPrefix?: boolean
+  ): Uint8Array;
 }
 
 const defaultSafeReaderDependencies: SafeWorkspaceFileReaderDependencies = {
@@ -61,18 +76,42 @@ export async function readWorkspaceFileSafely(
   maxBytes = MAX_FILE_ATTACHMENT_SIZE_BYTES,
   dependencies = defaultSafeReaderDependencies
 ): Promise<Uint8Array> {
+  return readVerifiedFile(uri, workspaceFolder, maxBytes, false, dependencies);
+}
+
+export async function readWorkspaceFilePrefix(
+  uri: vscode.Uri,
+  workspaceFolder: vscode.WorkspaceFolder,
+  maxBytes: number,
+  dependencies = defaultSafeReaderDependencies
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  const bytes = await readVerifiedFile(uri, workspaceFolder, maxBytes, true, dependencies);
+  return { bytes: bytes.subarray(0, maxBytes), truncated: bytes.byteLength > maxBytes };
+}
+
+async function readVerifiedFile(
+  uri: vscode.Uri,
+  workspaceFolder: vscode.WorkspaceFolder,
+  maxBytes: number,
+  allowPrefix: boolean,
+  dependencies: SafeWorkspaceFileReaderDependencies
+): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_SAFE_WORKSPACE_READ_BYTES) {
     throw new SecureAttachmentError('Invalid secure attachment size limit.');
   }
   if (uri.scheme !== 'file' || workspaceFolder.uri.scheme !== 'file') {
     throw new SecureAttachmentError(
-      'Secure file attachments are only supported for local files on macOS or Linux. This VS Code filesystem cannot safely verify the opened file.'
+      'Secure file attachments are only supported for local files on macOS or Linux. This VS Code filesystem cannot safely verify the opened file.',
+      'unsupported-filesystem'
     );
   }
 
   if (dependencies.platform === 'darwin') {
     if (!dependencies.readMacWorkspaceFile) {
-      throw new SecureAttachmentError('The secure macOS file reader is unavailable.');
+      throw new SecureAttachmentError(
+        'The secure macOS file reader is unavailable.',
+        'unsupported-filesystem'
+      );
     }
     const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
     if (
@@ -81,21 +120,35 @@ export async function readWorkspaceFileSafely(
       relativePath.startsWith(`..${path.sep}`) ||
       path.isAbsolute(relativePath)
     ) {
-      throw new SecureAttachmentError('The selected file is outside the open workspace.');
+      throw new SecureAttachmentError(
+        'The selected file is outside the open workspace.',
+        'outside-workspace'
+      );
     }
     try {
-      return dependencies.readMacWorkspaceFile(workspaceFolder.uri.fsPath, relativePath, maxBytes);
+      return allowPrefix
+        ? dependencies.readMacWorkspaceFile(
+            workspaceFolder.uri.fsPath,
+            relativePath,
+            maxBytes,
+            true
+          )
+        : dependencies.readMacWorkspaceFile(workspaceFolder.uri.fsPath, relativePath, maxBytes);
     } catch (error) {
       if (error instanceof SecureAttachmentError) {
         throw error;
       }
-      throw new SecureAttachmentError('The selected file could not be safely read.');
+      throw new SecureAttachmentError(
+        'The selected file could not be safely read.',
+        fileErrorCode(error)
+      );
     }
   }
 
   if (dependencies.platform !== 'linux') {
     throw new SecureAttachmentError(
-      'Secure file attachments are supported only on macOS or Linux for local files.'
+      'Secure file attachments are supported only on macOS or Linux for local files.',
+      'unsupported-filesystem'
     );
   }
 
@@ -105,17 +158,26 @@ export async function readWorkspaceFileSafely(
   } catch {
     throw new SecureAttachmentError('Unable to verify the workspace path for secure attachment.');
   }
-  const fileHandle = await dependencies.open(
-    uri.fsPath,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
-  );
+  let fileHandle: OpenFileHandle;
+  try {
+    fileHandle = await dependencies.open(
+      uri.fsPath,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    );
+  } catch (error) {
+    if (!allowPrefix) throw error;
+    throw new SecureAttachmentError(
+      'The selected file could not be safely read.',
+      fileErrorCode(error)
+    );
+  }
 
   try {
     const fileStat = await fileHandle.stat();
     if (!fileStat.isFile()) {
-      throw new SecureAttachmentError('Only regular files can be attached.');
+      throw new SecureAttachmentError('Only regular files can be attached.', 'not-file');
     }
-    if (fileStat.size > maxBytes) {
+    if (!allowPrefix && fileStat.size > maxBytes) {
       throw new SecureAttachmentError(`The selected file exceeds the ${maxBytes}-byte limit.`);
     }
 
@@ -124,7 +186,8 @@ export async function readWorkspaceFileSafely(
       openedFilePath = await dependencies.realpath(`/proc/self/fd/${fileHandle.fd}`);
     } catch {
       throw new SecureAttachmentError(
-        'This Linux environment cannot safely verify the opened file. Ensure /proc/self/fd is available.'
+        'This Linux environment cannot safely verify the opened file. Ensure /proc/self/fd is available.',
+        'unsupported-filesystem'
       );
     }
     const relativePath = path.relative(workspacePath, openedFilePath);
@@ -133,7 +196,10 @@ export async function readWorkspaceFileSafely(
       relativePath.startsWith(`..${path.sep}`) ||
       path.isAbsolute(relativePath)
     ) {
-      throw new SecureAttachmentError('The selected file resolves outside the open workspace.');
+      throw new SecureAttachmentError(
+        'The selected file resolves outside the open workspace.',
+        'outside-workspace'
+      );
     }
 
     const buffer = Buffer.alloc(maxBytes + 1);
@@ -150,7 +216,7 @@ export async function readWorkspaceFileSafely(
       }
       bytesRead += result.bytesRead;
     }
-    if (bytesRead > maxBytes) {
+    if (!allowPrefix && bytesRead > maxBytes) {
       throw new SecureAttachmentError(`The selected file exceeds the ${maxBytes}-byte limit.`);
     }
     return buffer.subarray(0, bytesRead);
@@ -159,13 +225,36 @@ export async function readWorkspaceFileSafely(
   }
 }
 
+function fileErrorCode(error: unknown): SafeWorkspaceFileErrorCode {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return 'unreadable';
+
+  switch (error.code) {
+    case 'ENOENT':
+      return 'missing';
+    case 'EISDIR':
+    case 'ENOTDIR':
+      return 'not-file';
+    case 'ELOOP':
+    case 'OUTSIDE_WORKSPACE':
+      return 'outside-workspace';
+    default:
+      return 'unreadable';
+  }
+}
+
 function loadMacWorkspaceFileReader(
   workspacePath: string,
   relativePath: string,
-  maxBytes: number
+  maxBytes: number,
+  allowPrefix = false
 ): Uint8Array {
   let nativeReader: {
-    readWorkspaceFile(root: string, relative: string, byteLimit: number): Uint8Array;
+    readWorkspaceFile(
+      root: string,
+      relative: string,
+      byteLimit: number,
+      allowPrefix: boolean
+    ): Uint8Array;
   };
   try {
     nativeReader = requireNativeModule(
@@ -173,10 +262,11 @@ function loadMacWorkspaceFileReader(
     ) as typeof nativeReader;
   } catch {
     throw new SecureAttachmentError(
-      'The secure macOS file reader is unavailable. Rebuild or reinstall the extension package.'
+      'The secure macOS file reader is unavailable. Rebuild or reinstall the extension package.',
+      'unsupported-filesystem'
     );
   }
-  return nativeReader.readWorkspaceFile(workspacePath, relativePath, maxBytes);
+  return nativeReader.readWorkspaceFile(workspacePath, relativePath, maxBytes, allowPrefix);
 }
 
 export async function collectFileAttachments(
