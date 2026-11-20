@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import {
   collectFileAttachments,
   MAX_FILE_ATTACHMENT_SIZE_BYTES,
+  readWorkspaceFilePrefix,
   readWorkspaceFileSafely,
   SecureAttachmentError,
   type AttachmentFileSystem,
@@ -248,5 +249,26 @@ describe('readWorkspaceFileSafely', () => {
     expect(handle.read).toHaveBeenCalledTimes(1);
     expect(handle.read.mock.calls[0]?.[2]).toBe(9);
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a prefix from the verified Linux descriptor even when the file exceeds the limit', async () => {
+    const { deps, handle } = dependencies('/workspace/src/file.ts');
+
+    await expect(readWorkspaceFilePrefix(uri, workspaceFolder, 9, deps)).resolves.toEqual({
+      bytes: Buffer.from('workspace'),
+      truncated: true,
+    });
+    expect(handle.read).toHaveBeenCalledTimes(1);
+    expect(handle.read.mock.calls[0]?.[2]).toBe(10);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns no prefix when the opened descriptor is outside the workspace', async () => {
+    const { deps, handle } = dependencies('/outside/file.ts');
+
+    await expect(readWorkspaceFilePrefix(uri, workspaceFolder, 9, deps)).rejects.toMatchObject({
+      code: 'outside-workspace',
+    });
+    expect(handle.read).not.toHaveBeenCalled();
   });
 });
