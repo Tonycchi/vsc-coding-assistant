@@ -1,14 +1,23 @@
 import type * as vscode from 'vscode';
 
+import type { MacWorkspaceRootIdentity } from '../context/macWorkspaceAccess';
 import { previewWorkspaceEdits, type WorkspaceEditPreview } from '../tools/workspaceEditPreview';
 import { createVerifiedWorkspaceDirectorySource } from './verifiedWorkspaceDiscovery';
 import { createWorkspaceFileReader } from './workspaceFileReader';
 
 export function createWorkspaceEditPreviewer(
-  workspaceFolder: vscode.WorkspaceFolder
+  workspaceFolder: vscode.WorkspaceFolder,
+  expectedMacRoot?: MacWorkspaceRootIdentity
 ): (edits: unknown) => Promise<WorkspaceEditPreview> {
-  const reader = createWorkspaceFileReader(workspaceFolder, { requireExactPath: true });
-  const directories = createVerifiedWorkspaceDirectorySource(workspaceFolder);
+  const reader = createWorkspaceFileReader(
+    workspaceFolder,
+    expectedMacRoot ? { expectedMacRoot } : { requireExactPath: true }
+  );
+  const directories = createVerifiedWorkspaceDirectorySource(
+    workspaceFolder,
+    undefined,
+    expectedMacRoot
+  );
 
   return (edits) =>
     previewWorkspaceEdits(edits, async (path, maxBytes) => {

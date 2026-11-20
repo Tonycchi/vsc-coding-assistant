@@ -118,16 +118,39 @@ static int open_workspace_directory(const char *workspace_path) {
   return workspace_fd;
 }
 
+static bool read_workspace_identity(napi_env env, napi_value device_value, napi_value inode_value,
+                                    uint64_t *device, uint64_t *inode) {
+  bool lossless = false;
+  return napi_get_value_bigint_uint64(env, device_value, device, &lossless) == napi_ok && lossless &&
+         napi_get_value_bigint_uint64(env, inode_value, inode, &lossless) == napi_ok && lossless;
+}
+
+static bool matches_workspace_identity(int fd, const char *expected_path,
+                                       uint64_t device, uint64_t inode) {
+  struct stat root_stat;
+  char root_actual_path[PATH_MAX];
+  return fstat(fd, &root_stat) == 0 && (uint64_t)root_stat.st_dev == device &&
+         (uint64_t)root_stat.st_ino == inode && fcntl(fd, F_GETPATH, root_actual_path) == 0 &&
+         strcmp(root_actual_path, expected_path) == 0;
+}
+
 static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4];
-  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 3) {
+  size_t argc = 7;
+  napi_value argv[7];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+      (argc != 3 && argc != 4 && argc != 6)) {
     return throw_error(env, "Expected workspace path, relative file path, and byte limit.");
   }
 
   bool allow_prefix = false;
-  if (argc == 4 && napi_get_value_bool(env, argv[3], &allow_prefix) != napi_ok) {
+  if (argc >= 4 && napi_get_value_bool(env, argv[3], &allow_prefix) != napi_ok) {
     return throw_error(env, "Invalid secure file reader arguments.");
+  }
+
+  bool pin_root = argc == 6;
+  uint64_t root_device = 0, root_inode = 0;
+  if (pin_root && !read_workspace_identity(env, argv[4], argv[5], &root_device, &root_inode)) {
+    return throw_error(env, "Invalid workspace root identity.");
   }
 
   size_t workspace_path_length = 0;
@@ -164,6 +187,13 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
     free(workspace_path);
     free(relative_path);
     return throw_error(env, "Unable to open the workspace folder safely.");
+  }
+  if (pin_root && !matches_workspace_identity(root_fd, workspace_path, root_device, root_inode)) {
+    close_if_open(root_fd);
+    free(workspace_path);
+    free(relative_path);
+    napi_throw_error(env, "OUTSIDE_WORKSPACE", "The opened workspace identity changed.");
+    return NULL;
   }
   int directory_fd = dup(root_fd);
   if (directory_fd < 0) {
@@ -298,10 +328,17 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
 }
 
 static napi_value read_workspace_directory(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
-  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc != 3) {
+  size_t argc = 6;
+  napi_value argv[6];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+      (argc != 3 && argc != 5)) {
     return throw_error(env, "Expected workspace path, relative directory, and entry limit.");
+  }
+
+  bool pin_root = argc == 5;
+  uint64_t root_device = 0, root_inode = 0;
+  if (pin_root && !read_workspace_identity(env, argv[3], argv[4], &root_device, &root_inode)) {
+    return throw_error(env, "Invalid workspace root identity.");
   }
 
   size_t root_length = 0;
@@ -321,6 +358,13 @@ static napi_value read_workspace_directory(napi_env env, napi_callback_info info
   }
 
   int root_fd = open_workspace_directory(workspace_path);
+  if (pin_root &&
+      (root_fd < 0 || !matches_workspace_identity(root_fd, workspace_path, root_device, root_inode))) {
+    close_if_open(root_fd);
+    free(workspace_path);
+    free(relative_path);
+    return throw_error(env, "The opened workspace identity changed.");
+  }
   free(workspace_path);
   int directory_fd = root_fd >= 0 ? dup(root_fd) : -1;
   if (directory_fd >= 0) {
@@ -464,12 +508,9 @@ static bool read_edit_metadata(int fd, const struct stat *file, struct edit_meta
 
 static bool verify_edit_directories(int root_fd, int parent_fd, const char *root,
                                     const char *parent, uint64_t device, uint64_t inode) {
-  struct stat root_stat;
-  char root_path[PATH_MAX], parent_path[PATH_MAX];
-  return fstat(root_fd, &root_stat) == 0 && (uint64_t)root_stat.st_dev == device &&
-         (uint64_t)root_stat.st_ino == inode && fcntl(root_fd, F_GETPATH, root_path) == 0 &&
-         fcntl(parent_fd, F_GETPATH, parent_path) == 0 && strcmp(root_path, root) == 0 &&
-         strcmp(parent_path, parent) == 0;
+  char parent_path[PATH_MAX];
+  return matches_workspace_identity(root_fd, root, device, inode) &&
+         fcntl(parent_fd, F_GETPATH, parent_path) == 0 && strcmp(parent_path, parent) == 0;
 }
 
 /* 1 means the exact approved bytes still exist, 0 means stale, -1 means unreadable. */

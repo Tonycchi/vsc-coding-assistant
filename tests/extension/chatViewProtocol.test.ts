@@ -27,4 +27,21 @@ describe('parseChatViewMessage', () => {
     expect(parseChatViewMessage({ type: 'remove-attachment', filePath: '' })).toBeUndefined();
     expect(parseChatViewMessage({ type: 'remove-attachment', filePath: 42 })).toBeUndefined();
   });
+  it('accepts only valid host proposal IDs for edit decisions', () => {
+    expect(parseChatViewMessage({ type: 'approve-edit', proposalId: 'id-123' })).toEqual({
+      type: 'approve-edit',
+      proposalId: 'id-123',
+    });
+    expect(parseChatViewMessage({ type: 'reject-edit', proposalId: 'id-123' })).toEqual({
+      type: 'reject-edit',
+      proposalId: 'id-123',
+    });
+    expect(parseChatViewMessage({ type: 'approve-edit', proposalId: '../file' })).toBeUndefined();
+    expect(
+      parseChatViewMessage({ type: 'reject-edit', proposalId: 'x'.repeat(129) })
+    ).toBeUndefined();
+    expect(
+      parseChatViewMessage({ type: 'approve-edit', proposalId: 'id-123', edits: [] })
+    ).toBeUndefined();
+  });
 });

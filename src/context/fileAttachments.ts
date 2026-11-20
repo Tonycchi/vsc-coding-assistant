@@ -2,7 +2,7 @@ import type * as vscode from 'vscode';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { loadMacWorkspaceAccess } from './macWorkspaceAccess';
+import { loadMacWorkspaceAccess, type MacWorkspaceRootIdentity } from './macWorkspaceAccess';
 
 export interface FileAttachment {
   filePath: string;
@@ -58,7 +58,8 @@ export interface SafeWorkspaceFileReaderDependencies {
     workspacePath: string,
     relativePath: string,
     maxBytes: number,
-    allowPrefix?: boolean
+    allowPrefix?: boolean,
+    expectedMacRoot?: MacWorkspaceRootIdentity
   ): Uint8Array;
 }
 
@@ -93,9 +94,18 @@ export async function readWorkspaceFilePrefixAtPath(
   uri: vscode.Uri,
   workspaceFolder: vscode.WorkspaceFolder,
   maxBytes: number,
-  dependencies = defaultSafeReaderDependencies
+  dependencies = defaultSafeReaderDependencies,
+  expectedMacRoot?: MacWorkspaceRootIdentity
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> {
-  const bytes = await readVerifiedFile(uri, workspaceFolder, maxBytes, true, dependencies, true);
+  const bytes = await readVerifiedFile(
+    uri,
+    workspaceFolder,
+    maxBytes,
+    true,
+    dependencies,
+    true,
+    expectedMacRoot
+  );
   return { bytes: bytes.subarray(0, maxBytes), truncated: bytes.byteLength > maxBytes };
 }
 
@@ -105,7 +115,8 @@ async function readVerifiedFile(
   maxBytes: number,
   allowPrefix: boolean,
   dependencies: SafeWorkspaceFileReaderDependencies,
-  requireExactPath = false
+  requireExactPath = false,
+  expectedMacRoot?: MacWorkspaceRootIdentity
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_SAFE_WORKSPACE_READ_BYTES) {
     throw new SecureAttachmentError('Invalid secure attachment size limit.');
@@ -113,6 +124,13 @@ async function readVerifiedFile(
   if (uri.scheme !== 'file' || workspaceFolder.uri.scheme !== 'file') {
     throw new SecureAttachmentError(
       'Secure file attachments are only supported for local files on macOS or Linux. This VS Code filesystem cannot safely verify the opened file.',
+      'unsupported-filesystem'
+    );
+  }
+
+  if (expectedMacRoot && dependencies.platform !== 'darwin') {
+    throw new SecureAttachmentError(
+      'The pinned macOS workspace reader is unavailable.',
       'unsupported-filesystem'
     );
   }
@@ -137,6 +155,15 @@ async function readVerifiedFile(
       );
     }
     try {
+      if (expectedMacRoot) {
+        return dependencies.readMacWorkspaceFile(
+          expectedMacRoot.path,
+          relativePath,
+          maxBytes,
+          allowPrefix,
+          expectedMacRoot
+        );
+      }
       return allowPrefix
         ? dependencies.readMacWorkspaceFile(
             workspaceFolder.uri.fsPath,
@@ -268,7 +295,8 @@ function loadMacWorkspaceFileReader(
   workspacePath: string,
   relativePath: string,
   maxBytes: number,
-  allowPrefix = false
+  allowPrefix = false,
+  expectedMacRoot?: MacWorkspaceRootIdentity
 ): Uint8Array {
   let nativeReader: ReturnType<typeof loadMacWorkspaceAccess>;
   try {
@@ -279,7 +307,16 @@ function loadMacWorkspaceFileReader(
       'unsupported-filesystem'
     );
   }
-  return nativeReader.readWorkspaceFile(workspacePath, relativePath, maxBytes, allowPrefix);
+  return expectedMacRoot
+    ? nativeReader.readWorkspaceFile(
+        workspacePath,
+        relativePath,
+        maxBytes,
+        allowPrefix,
+        expectedMacRoot.device,
+        expectedMacRoot.inode
+      )
+    : nativeReader.readWorkspaceFile(workspacePath, relativePath, maxBytes, allowPrefix);
 }
 
 export async function collectFileAttachments(

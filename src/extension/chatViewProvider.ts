@@ -9,6 +9,11 @@ import { createChatSession, streamChatTurn } from '../services';
 import type { ChatMessage } from '../types';
 import { parseChatViewMessage } from './chatViewProtocol';
 import { getRepositoryTools } from './repositoryTools';
+import {
+  createChatEditTurn,
+  type ChatEditPreview,
+  type PendingChatEdit,
+} from './chatWorkspaceEdits';
 
 export const CHAT_VIEW_ID = 'vscCodingAssistant.chatView';
 
@@ -24,35 +29,45 @@ type ChatViewResponse =
   | { type: 'assistant-complete' }
   | { type: 'assistant-discard' }
   | { type: 'assistant-error'; content: string }
-  | { type: 'loading'; value: boolean };
+  | { type: 'edit-proposal'; proposal: ChatEditPreview | null }
+  | { type: 'edit-outcome'; content: string }
+  | { type: 'loading'; value: boolean; operation?: 'apply-edit' };
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private readonly session = createChatSession('sidebar-chat');
   private view: vscode.WebviewView | undefined;
   private isGenerating = false;
+  private pendingEdit: PendingChatEdit | undefined;
+  private isApplyingEdit = false;
   private currentStreamText: string | undefined;
   private attachments: FileAttachment[] = [];
 
   public constructor(private readonly getProvider: () => Promise<ModelProvider>) {}
 
   public resolveWebviewView(view: vscode.WebviewView): void {
+    this.discardPendingEdit();
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.html = getChatHtml();
 
     const messageListener = view.webview.onDidReceiveMessage((value: unknown) =>
-      this.handleMessage(value)
+      this.handleMessage(view, value)
     );
 
     view.onDidDispose(() => {
       messageListener.dispose();
       if (this.view === view) {
         this.view = undefined;
+        this.discardPendingEdit();
       }
     });
   }
 
-  private async handleMessage(value: unknown): Promise<void> {
+  private async handleMessage(view: vscode.WebviewView, value: unknown): Promise<void> {
+    if (this.view !== view) {
+      return;
+    }
+
     const message = parseChatViewMessage(value);
     if (!message) {
       return;
@@ -70,19 +85,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.postMessage({ type: 'assistant-chunk', content: this.currentStreamText });
         }
       }
-      await this.postMessage({ type: 'loading', value: this.isGenerating });
+      if (this.pendingEdit) {
+        await this.postMessage({ type: 'edit-proposal', proposal: this.pendingEdit.preview });
+      }
+      if (this.isApplyingEdit) {
+        await this.postMessage({ type: 'loading', value: true, operation: 'apply-edit' });
+      } else {
+        await this.postMessage({ type: 'loading', value: this.isGenerating });
+      }
+      return;
+    }
+
+    if (message.type === 'approve-edit' || message.type === 'reject-edit') {
+      await this.handleEditDecision(message.proposalId, message.type === 'approve-edit');
       return;
     }
 
     if (message.type === 'attach-files') {
-      if (!this.isGenerating) {
+      if (!this.isGenerating && !this.isApplyingEdit) {
         await this.attachFiles();
       }
       return;
     }
 
     if (message.type === 'remove-attachment') {
-      if (!this.isGenerating) {
+      if (!this.isGenerating && !this.isApplyingEdit) {
         const remaining = this.attachments.filter(({ filePath }) => filePath !== message.filePath);
         if (remaining.length < this.attachments.length) {
           this.attachments = remaining;
@@ -92,8 +119,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (message.type !== 'send') {
+      return;
+    }
     const prompt = message.content.trim();
-    if (!prompt || this.isGenerating) {
+    if (!prompt || this.isGenerating || this.isApplyingEdit) {
       return;
     }
 
@@ -102,6 +132,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const editor = vscode.window.activeTextEditor;
       const editorContext = collectEditorContext(editor);
       const tools = getRepositoryTools(editor);
+      const editTurn = createChatEditTurn(editor);
+      if (editTurn) {
+        tools.push(editTurn.tool);
+      }
+      if (this.discardPendingEdit()) {
+        await this.postMessage({ type: 'edit-proposal', proposal: null });
+        await this.postMessage({ type: 'edit-outcome', content: 'The previous proposal expired.' });
+      }
       await this.postMessage({ type: 'loading', value: true });
 
       const provider = await this.getProvider();
@@ -123,6 +161,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       this.currentStreamText = undefined;
       await this.postMessage({ type: 'assistant-complete' });
+      if (this.view === view) {
+        this.pendingEdit = editTurn?.finalize();
+        if (this.pendingEdit) {
+          await this.postMessage({ type: 'edit-proposal', proposal: this.pendingEdit.preview });
+        }
+      }
     } catch (error) {
       this.currentStreamText = undefined;
       await this.postMessage({ type: 'assistant-discard' });
@@ -130,6 +174,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.postMessage({ type: 'assistant-error', content });
     } finally {
       this.isGenerating = false;
+      await this.postMessage({ type: 'loading', value: false });
+    }
+  }
+
+  private discardPendingEdit(): boolean {
+    const pending = this.pendingEdit;
+    this.pendingEdit = undefined;
+    pending?.reject();
+    return pending !== undefined;
+  }
+
+  private async handleEditDecision(proposalId: string, approve: boolean): Promise<void> {
+    const pending = this.pendingEdit;
+    if (this.isGenerating || this.isApplyingEdit || pending?.preview.id !== proposalId) {
+      return;
+    }
+    this.pendingEdit = undefined;
+    if (!approve) {
+      pending.reject();
+      await this.postMessage({ type: 'edit-proposal', proposal: null });
+      await this.postMessage({ type: 'edit-outcome', content: 'Rejected the proposed changes.' });
+      return;
+    }
+
+    this.isApplyingEdit = true;
+    try {
+      await this.postMessage({ type: 'loading', value: true, operation: 'apply-edit' });
+      await this.postMessage({ type: 'edit-proposal', proposal: null });
+      const content = await pending.approve();
+      await this.postMessage({ type: 'edit-outcome', content });
+    } catch {
+      pending.reject();
+      await this.postMessage({
+        type: 'edit-outcome',
+        content: 'Unable to apply the proposed changes.',
+      });
+    } finally {
+      this.isApplyingEdit = false;
       await this.postMessage({ type: 'loading', value: false });
     }
   }
@@ -243,6 +325,12 @@ function getChatHtml(): string {
     .message[data-role="user"] { background: var(--vscode-inputOption-activeBackground); }
     .message[data-role="error"] { color: var(--vscode-errorForeground); }
     .label { display: block; font-size: 0.8em; opacity: 0.75; margin-bottom: 4px; }
+    #edit-proposal { margin: 8px 0; padding: 8px; border: 1px solid var(--vscode-widget-border); overflow-wrap: anywhere; }
+    #edit-proposal h2, #edit-proposal h3 { margin: 6px 0; }
+    #edit-proposal h2 { font-size: 1em; }
+    #edit-proposal h3 { font-size: 0.9em; }
+    .edit-diff { white-space: pre; overflow: auto; max-height: 18em; padding: 6px; background: var(--vscode-editor-background); }
+    .edit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     #empty { opacity: 0.75; text-align: center; padding: 20px 8px; }
     #status { min-height: 1.4em; margin: 8px 0; font-size: 0.9em; }
     form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
@@ -256,6 +344,7 @@ function getChatHtml(): string {
   <div id="empty">Ask a question to start a conversation.</div>
   <div id="status" role="status" aria-live="polite"></div>
   <div id="attachments" aria-label="Attached files"></div>
+  <section id="edit-proposal" aria-label="Workspace edit proposal" aria-live="polite" hidden></section>
   <form id="chat-form">
     <button id="attach" type="button">Attach files</button>
     <textarea id="prompt" maxlength="20000" aria-label="Message" placeholder="Ask about your code…"></textarea>
@@ -270,7 +359,9 @@ function getChatHtml(): string {
     const send = document.getElementById('send');
     const attach = document.getElementById('attach');
     const attachments = document.getElementById('attachments');
+    const editProposal = document.getElementById('edit-proposal');
     let currentAssistant = null;
+    let restorePromptFocus = false;
 
     function updateEmptyState() {
       empty.hidden = messages.childElementCount > 0;
@@ -282,7 +373,7 @@ function getChatHtml(): string {
       article.dataset.role = role;
       const label = document.createElement('span');
       label.className = 'label';
-      label.textContent = role === 'error' ? 'Error' : role === 'user' ? 'You' : 'Assistant';
+      label.textContent = role === 'error' ? 'Error' : role === 'user' ? 'You' : role === 'edit' ? 'Workspace edits' : 'Assistant';
       const body = document.createElement('div');
       body.className = 'content';
       body.textContent = content;
@@ -292,14 +383,21 @@ function getChatHtml(): string {
       return body;
     }
 
-    function setLoading(value) {
+    function setLoading(value, operation) {
       prompt.disabled = value;
       send.disabled = value;
       attach.disabled = value;
       for (const button of attachments.querySelectorAll('button')) {
         button.disabled = value;
       }
-      status.textContent = value ? 'Assistant is responding…' : '';
+      for (const button of editProposal.querySelectorAll('button')) {
+        button.disabled = value || editProposal.dataset.decisionSent === 'true';
+      }
+      status.textContent = value ? (operation === 'apply-edit' ? 'Applying workspace edits…' : 'Assistant is responding…') : '';
+      if (!value && restorePromptFocus) {
+        restorePromptFocus = false;
+        if (document.activeElement === document.body) prompt.focus();
+      }
     }
 
     function renderAttachments(items) {
@@ -338,6 +436,50 @@ function getChatHtml(): string {
       }
     }
 
+    function renderEditProposal(proposal) {
+      const restoreFocus = editProposal.contains(document.activeElement);
+      editProposal.replaceChildren();
+      editProposal.hidden = !proposal;
+      delete editProposal.dataset.decisionSent;
+      if (!proposal) {
+        if (restoreFocus && prompt.disabled) restorePromptFocus = true;
+        else if (restoreFocus) prompt.focus();
+        return;
+      }
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Review edits in ' + proposal.workspaceName;
+      editProposal.append(heading);
+      for (const file of proposal.files) {
+        const title = document.createElement('h3');
+        title.textContent = file.path;
+        const diff = document.createElement('pre');
+        diff.className = 'edit-diff';
+        diff.tabIndex = 0;
+        diff.setAttribute('aria-label', 'Diff for ' + file.path);
+        diff.textContent = file.diff;
+        editProposal.append(title, diff);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'edit-actions';
+      for (const [type, label] of [['approve-edit', 'Apply changes'], ['reject-edit', 'Reject']]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.disabled = send.disabled;
+        button.addEventListener('click', () => {
+          if (button.disabled) return;
+          if (editProposal.contains(document.activeElement)) restorePromptFocus = true;
+          editProposal.dataset.decisionSent = 'true';
+          for (const control of actions.querySelectorAll('button')) control.disabled = true;
+          vscode.postMessage({ type, proposalId: proposal.id });
+        });
+        actions.append(button);
+      }
+      editProposal.append(actions);
+    }
+
     attach.addEventListener('click', () => {
       if (!attach.disabled) vscode.postMessage({ type: 'attach-files' });
     });
@@ -365,6 +507,18 @@ function getChatHtml(): string {
         updateEmptyState();
       } else if (message.type === 'attachments' && Array.isArray(message.attachments)) {
         renderAttachments(message.attachments);
+      } else if (message.type === 'edit-proposal') {
+        const proposal = message.proposal;
+        if (proposal === null || (proposal && typeof proposal.id === 'string' &&
+          typeof proposal.workspaceName === 'string' && Array.isArray(proposal.files))) {
+          renderEditProposal(proposal);
+        }
+      } else if (message.type === 'edit-outcome' && typeof message.content === 'string') {
+        addMessage('edit', message.content);
+        if (!prompt.disabled && restorePromptFocus) {
+          restorePromptFocus = false;
+          if (document.activeElement === document.body) prompt.focus();
+        }
       } else if (message.type === 'user-message' && typeof message.content === 'string') {
         addMessage('user', message.content);
       } else if (message.type === 'assistant-start') {

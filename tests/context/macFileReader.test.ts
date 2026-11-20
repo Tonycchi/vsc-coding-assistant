@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import type * as vscode from 'vscode';
 
 import { readWorkspaceFileSafely } from '../../src/context';
+import { loadMacWorkspaceAccess } from '../../src/context/macWorkspaceAccess';
 
 const nativeReaderPath = path.resolve(
   __dirname,
@@ -132,6 +133,26 @@ macNativeDescribe('macOS native workspace file reader', () => {
     );
     expect(() => nativeReader.readWorkspaceFile(workspaceRoot, '../outside/file.txt', 100)).toThrow(
       'The selected file path contains an unsafe component.'
+    );
+  });
+
+  it('requires the pinned root identity for file reads and parent checks', async () => {
+    const native = loadMacWorkspaceAccess();
+    const root = await fs.realpath(workspaceRoot);
+    const { dev, ino } = await fs.stat(root, { bigint: true });
+    await fs.writeFile(path.join(root, 'file.txt'), 'content');
+    await fs.mkdir(path.join(root, 'empty'));
+
+    expect(native.readWorkspaceFile(root, 'file.txt', 100, true, dev, ino)).toEqual(
+      Buffer.from('content')
+    );
+    expect(native.readWorkspaceDirectory(root, 'empty', 0, dev, ino)).toEqual([]);
+
+    expect(() => native.readWorkspaceFile(root, 'file.txt', 100, true, dev, ino + 1n)).toThrow(
+      'The opened workspace identity changed.'
+    );
+    expect(() => native.readWorkspaceDirectory(root, 'empty', 0, dev + 1n, ino)).toThrow(
+      'The opened workspace identity changed.'
     );
   });
 
