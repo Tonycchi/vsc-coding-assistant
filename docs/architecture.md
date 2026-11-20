@@ -427,10 +427,10 @@ performs no writes.
 
 The extension keeps a single immutable preview per approval gate. An opaque ID
 can be consumed only once. Approval checks every file's saved contents before
-starting. A stale or unsupported file stops the batch before the first write.
-Each write rechecks the file immediately before publication. If a file becomes
-stale or a write fails partway through, the result lists applied, stale, failed,
-and skipped files. Earlier edits remain applied.
+starting. Any failure found during those checks stops the batch before the first
+write. Each write also rechecks the file and verifies its permissions and
+metadata before publication. If a later check or write fails, the result lists
+applied, stale, failed, and skipped files. Earlier edits remain applied.
 
 The local macOS writer verifies the pinned workspace identity and opens parent
 directories without following symbolic links. It stages the complete file in
