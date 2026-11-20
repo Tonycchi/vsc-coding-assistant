@@ -3,7 +3,8 @@ export const MAX_CHAT_INPUT_LENGTH = 20_000;
 export type ChatViewMessage =
   | { type: 'ready' }
   | { type: 'send'; content: string }
-  | { type: 'attach-files' };
+  | { type: 'attach-files' }
+  | { type: 'remove-attachment'; filePath: string };
 
 export function parseChatViewMessage(value: unknown): ChatViewMessage | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -17,6 +18,13 @@ export function parseChatViewMessage(value: unknown): ChatViewMessage | undefine
 
   if (message.type === 'attach-files') {
     return { type: 'attach-files' };
+  }
+  if (
+    message.type === 'remove-attachment' &&
+    typeof message.filePath === 'string' &&
+    message.filePath.length > 0
+  ) {
+    return { type: 'remove-attachment', filePath: message.filePath };
   }
   if (
     message.type === 'send' &&
