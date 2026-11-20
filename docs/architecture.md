@@ -417,8 +417,11 @@ literal patches before reading file contents through the verified workspace read
 Each patch fragment must match exactly once. A preview records the exact before
 and after text for each file and a deterministic display diff. The preview rejects
 invalid or oversized text, stale patch fragments, and paths inside `.git`. New
-files require an existing, verified parent directory. The diff shows line ending
-and control character changes explicitly. Building a preview performs no writes.
+files require an existing, verified parent directory. On Linux, the opened
+file's workspace-relative path must match the requested one. On macOS, the
+reader opens each component without following symbolic links. The diff shows
+line ending and control character changes explicitly. Building a preview
+performs no writes.
 
 ---
 

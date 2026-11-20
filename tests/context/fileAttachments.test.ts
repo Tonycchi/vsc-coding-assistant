@@ -5,6 +5,7 @@ import {
   collectFileAttachments,
   MAX_FILE_ATTACHMENT_SIZE_BYTES,
   readWorkspaceFilePrefix,
+  readWorkspaceFilePrefixAtPath,
   readWorkspaceFileSafely,
   SecureAttachmentError,
   type AttachmentFileSystem,
@@ -270,5 +271,29 @@ describe('readWorkspaceFileSafely', () => {
       code: 'outside-workspace',
     });
     expect(handle.read).not.toHaveBeenCalled();
+  });
+
+  it('can require an exact workspace-relative path for a prefix read', async () => {
+    const target = { scheme: 'file', fsPath: '/workspace/src/file.ts' } as vscode.Uri;
+    const { deps, handle } = dependencies(target.fsPath);
+
+    await expect(readWorkspaceFilePrefixAtPath(target, workspaceFolder, 9, deps)).resolves.toEqual({
+      bytes: Buffer.from('workspace'),
+      truncated: true,
+    });
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a mismatched descriptor before reading when an exact path is required', async () => {
+    const target = { scheme: 'file', fsPath: '/workspace/src/file.ts' } as vscode.Uri;
+    const { deps, handle } = dependencies('/workspace/other/file.ts');
+
+    await expect(
+      readWorkspaceFilePrefixAtPath(target, workspaceFolder, 9, deps)
+    ).rejects.toMatchObject({
+      code: 'outside-workspace',
+    });
+    expect(handle.read).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });

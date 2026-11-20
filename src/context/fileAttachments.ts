@@ -88,12 +88,24 @@ export async function readWorkspaceFilePrefix(
   return { bytes: bytes.subarray(0, maxBytes), truncated: bytes.byteLength > maxBytes };
 }
 
+/** Read a prefix without resolving it from an aliased workspace-relative path. */
+export async function readWorkspaceFilePrefixAtPath(
+  uri: vscode.Uri,
+  workspaceFolder: vscode.WorkspaceFolder,
+  maxBytes: number,
+  dependencies = defaultSafeReaderDependencies
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  const bytes = await readVerifiedFile(uri, workspaceFolder, maxBytes, true, dependencies, true);
+  return { bytes: bytes.subarray(0, maxBytes), truncated: bytes.byteLength > maxBytes };
+}
+
 async function readVerifiedFile(
   uri: vscode.Uri,
   workspaceFolder: vscode.WorkspaceFolder,
   maxBytes: number,
   allowPrefix: boolean,
-  dependencies: SafeWorkspaceFileReaderDependencies
+  dependencies: SafeWorkspaceFileReaderDependencies,
+  requireExactPath = false
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_SAFE_WORKSPACE_READ_BYTES) {
     throw new SecureAttachmentError('Invalid secure attachment size limit.');
@@ -197,6 +209,17 @@ async function readVerifiedFile(
     ) {
       throw new SecureAttachmentError(
         'The selected file resolves outside the open workspace.',
+        'outside-workspace'
+      );
+    }
+    // A path policy based on the requested name must see the same name on the opened descriptor.
+    // The macOS helper already opens each component without following symbolic links.
+    if (
+      requireExactPath &&
+      relativePath !== path.relative(workspaceFolder.uri.fsPath, uri.fsPath)
+    ) {
+      throw new SecureAttachmentError(
+        'The opened file does not match the requested workspace path.',
         'outside-workspace'
       );
     }

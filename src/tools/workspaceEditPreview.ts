@@ -151,7 +151,9 @@ async function readBefore(
     case 'not-file':
       throw new Error(`"${edit.path}" is not a regular file.`);
     case 'outside-workspace':
-      throw new Error(`"${edit.path}" is outside the verified workspace.`);
+      throw new Error(
+        `"${edit.path}" is outside the verified workspace or resolves through an alias.`
+      );
     case 'unsupported-filesystem':
       throw new Error('This filesystem does not support verified workspace previews.');
     case 'unreadable':

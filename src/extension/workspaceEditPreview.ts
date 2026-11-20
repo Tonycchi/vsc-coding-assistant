@@ -7,7 +7,7 @@ import { createWorkspaceFileReader } from './workspaceFileReader';
 export function createWorkspaceEditPreviewer(
   workspaceFolder: vscode.WorkspaceFolder
 ): (edits: unknown) => Promise<WorkspaceEditPreview> {
-  const reader = createWorkspaceFileReader(workspaceFolder);
+  const reader = createWorkspaceFileReader(workspaceFolder, { requireExactPath: true });
   const directories = createVerifiedWorkspaceDirectorySource(workspaceFolder);
 
   return (edits) =>
