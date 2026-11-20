@@ -363,6 +363,11 @@ Future additions:
 - RAG retrieval
 - Workspace search
 
+The repository `read_file` tool shares the verified local file reader used by attachments. The
+tool returns a workspace-relative path and up to 100,000 bytes of UTF-8 text. It reports truncation
+when more bytes are present. Attachments still reject oversized files. Both features require a
+supported local filesystem so they can verify the opened file before reading its contents.
+
 ---
 
 # Testing Strategy

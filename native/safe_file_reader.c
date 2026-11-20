@@ -18,6 +18,18 @@ static napi_value throw_error(napi_env env, const char *message) {
   return NULL;
 }
 
+static napi_value throw_file_error(napi_env env, int error_code, const char *message) {
+  const char *code = NULL;
+  switch (error_code) {
+    case ENOENT: code = "ENOENT"; break;
+    case ENOTDIR: code = "ENOTDIR"; break;
+    case EISDIR: code = "EISDIR"; break;
+    case ELOOP: code = "ELOOP"; break;
+  }
+  napi_throw_error(env, code, message);
+  return NULL;
+}
+
 static char *read_string(napi_env env, napi_value value, size_t *out_length) {
   size_t length = 0;
   if (napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok) {
@@ -106,10 +118,15 @@ static int open_workspace_directory(const char *workspace_path) {
 }
 
 static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
-  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc != 3) {
+  size_t argc = 4;
+  napi_value argv[4];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 3) {
     return throw_error(env, "Expected workspace path, relative file path, and byte limit.");
+  }
+
+  bool allow_prefix = false;
+  if (argc == 4 && napi_get_value_bool(env, argv[3], &allow_prefix) != napi_ok) {
+    return throw_error(env, "Invalid secure file reader arguments.");
   }
 
   size_t workspace_path_length = 0;
@@ -156,6 +173,7 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
   }
 
   int file_fd = -1;
+  int file_open_error = 0;
   char *cursor = relative_path;
   for (;;) {
     char *separator = strchr(cursor, '/');
@@ -173,17 +191,21 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
     if (separator == NULL) {
       file_fd = openat(directory_fd, cursor,
                        O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+      if (file_fd < 0) {
+        file_open_error = errno;
+      }
       break;
     }
 
     int next_fd = openat(directory_fd, cursor,
                          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (next_fd < 0) {
+      int open_error = errno;
       close_if_open(directory_fd);
       close_if_open(root_fd);
       free(workspace_path);
       free(relative_path);
-      return throw_error(env, "The selected file path cannot be traversed safely.");
+      return throw_file_error(env, open_error, "The selected file path cannot be traversed safely.");
     }
     close_if_open(directory_fd);
     directory_fd = next_fd;
@@ -195,16 +217,21 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
   free(relative_path);
   if (file_fd < 0) {
     close_if_open(root_fd);
-    return throw_error(env, "The selected file cannot be opened safely.");
+    return throw_file_error(env, file_open_error, "The selected file cannot be opened safely.");
   }
 
   struct stat file_stat;
-  if (fstat(file_fd, &file_stat) != 0 || !S_ISREG(file_stat.st_mode)) {
+  if (fstat(file_fd, &file_stat) != 0) {
     close_if_open(file_fd);
     close_if_open(root_fd);
-    return throw_error(env, "Only regular files can be attached.");
+    return throw_error(env, "Unable to inspect the selected file safely.");
   }
-  if (file_stat.st_size > (off_t)max_bytes) {
+  if (!S_ISREG(file_stat.st_mode)) {
+    close_if_open(file_fd);
+    close_if_open(root_fd);
+    return throw_file_error(env, EISDIR, "Only regular files can be read.");
+  }
+  if (!allow_prefix && file_stat.st_size > (off_t)max_bytes) {
     close_if_open(file_fd);
     close_if_open(root_fd);
     return throw_error(env, "The selected file exceeds the configured byte limit.");
@@ -221,12 +248,18 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
   char root_actual_path[PATH_MAX];
   char file_actual_path[PATH_MAX];
   if (fcntl(root_fd, F_GETPATH, root_actual_path) < 0 ||
-      fcntl(file_fd, F_GETPATH, file_actual_path) < 0 ||
-      !path_is_within(root_actual_path, file_actual_path)) {
+      fcntl(file_fd, F_GETPATH, file_actual_path) < 0) {
     free(buffer);
     close_if_open(file_fd);
     close_if_open(root_fd);
-    return throw_error(env, "The opened file is no longer within the workspace path.");
+    return throw_error(env, "Unable to verify the opened workspace file.");
+  }
+  if (!path_is_within(root_actual_path, file_actual_path)) {
+    free(buffer);
+    close_if_open(file_fd);
+    close_if_open(root_fd);
+    napi_throw_error(env, "OUTSIDE_WORKSPACE", "The opened file is no longer within the workspace path.");
+    return NULL;
   }
 
   size_t total = 0;
@@ -249,7 +282,7 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
   close_if_open(file_fd);
   close_if_open(root_fd);
 
-  if (total > max_bytes) {
+  if (!allow_prefix && total > max_bytes) {
     free(buffer);
     return throw_error(env, "The selected file exceeds the configured byte limit.");
   }
