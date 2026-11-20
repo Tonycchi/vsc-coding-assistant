@@ -23,7 +23,7 @@ The extension checks that the key and model setting are present and structurally
 
 ### File attachments
 
-Secure workspace file attachments are currently supported on Linux for local `file:` URIs. On macOS, Windows, and virtual or remote filesystems, attachment fails closed because the available VS Code APIs cannot verify the opened file's workspace boundary safely.
+Secure workspace file attachments are supported on Linux and macOS for local `file:` URIs. The macOS extension package includes a universal arm64/x64 native reader. On Windows, remote workspaces, and virtual filesystems, attachment fails closed because the available APIs cannot verify the opened file's workspace boundary safely. Build both macOS VSIX targets on a Mac with Xcode Command Line Tools by running `npm run package:macos`.
 
 Before committing any code, please run the formatter and linter via
 

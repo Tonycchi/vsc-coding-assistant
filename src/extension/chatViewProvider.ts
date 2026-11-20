@@ -151,12 +151,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       const newAttachments = await collectFileAttachments(selectedUris, {
         stat: (uri) => vscode.workspace.fs.stat(uri),
-        readFile: (uri) => {
+        readFile: (uri, maxBytes) => {
           const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
           if (!workspaceFolder) {
             throw new Error('Choose files inside an open workspace.');
           }
-          return readWorkspaceFileSafely(uri, workspaceFolder);
+          return readWorkspaceFileSafely(uri, workspaceFolder, maxBytes);
         },
       });
       const byPath = new Map(
