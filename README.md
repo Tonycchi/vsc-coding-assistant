@@ -21,6 +21,10 @@ git clone https://github.com/Tonycchi/vsc-coding-assistant.git
 
 The extension checks that the key and model setting are present and structurally valid. OpenRouter reports whether the saved key or selected model is accepted when a request is sent.
 
+### File attachments
+
+Secure workspace file attachments are supported on Linux and macOS for local `file:` URIs. The macOS extension package includes a universal arm64/x64 native reader. On Windows, remote workspaces, and virtual filesystems, attachment fails closed because the available APIs cannot verify the opened file's workspace boundary safely. Build both macOS VSIX targets on a Mac with Xcode Command Line Tools by running `npm run package:macos`.
+
 ## Development and tests
 
 Use Node.js 22.18.0 (the repository pins this version with Volta), then install the locked dependencies:

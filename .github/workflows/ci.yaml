@@ -32,3 +32,33 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  macos-native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package macOS targets
+        run: npm run package:macos
+
+      - name: Verify packaged native helper
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=( *-darwin-*.vsix )
+          test "${#packages[@]}" -eq 2
+          for package in "${packages[@]}"; do
+            unzip -l "$package" | grep -q 'extension/native/build/Release/safe_file_reader.node'
+          done
+
+      - name: Test macOS native reader
+        run: npm test

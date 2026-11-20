@@ -88,6 +88,37 @@ describe('buildChatPrompt', () => {
     expect(prompt[1]?.content.length).toBeLessThanOrEqual(20_000);
   });
 
+  it('keeps attached file content inside the shared editor context limit', () => {
+    const attachment = {
+      filePath: '/workspace/src/large.ts',
+      fileName: 'large.ts',
+      fileContent: 'attached source '.repeat(2_000),
+      sizeBytes: 32_000,
+    };
+    const prompt = buildChatPrompt(
+      { id: 'session-1', messages: [{ role: 'user', content: 'Review this file.' }] },
+      {
+        filePath: '/workspace/src/current.ts',
+        fileContent: 'editor context',
+        selectedText: 'selection',
+      },
+      [attachment]
+    );
+    const serializedContext = prompt[1]?.content.replace('Current editor context (JSON):\n', '');
+    const limitedContext = JSON.parse(serializedContext ?? '') as {
+      attachments: Array<typeof attachment>;
+      truncated: boolean;
+    };
+
+    expect(limitedContext.attachments[0]?.filePath).toBe(attachment.filePath);
+    expect(limitedContext.attachments[0]?.fileContent.length).toBeGreaterThan(0);
+    expect(limitedContext.attachments[0]?.fileContent.length).toBeLessThan(
+      attachment.fileContent.length
+    );
+    expect(limitedContext.truncated).toBe(true);
+    expect(prompt[1]?.content.length).toBeLessThanOrEqual(20_000);
+  });
+
   it('does not mutate the session messages', () => {
     const messages = [{ role: 'user' as const, content: 'Hello' }];
     const session = { id: 'session-1', messages };

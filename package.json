@@ -54,10 +54,14 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
+    "build:native": "node scripts/build-native.js",
     "type-check": "tsc --noEmit",
+    "pretest": "npm run build:native",
     "test": "jest",
     "prepare": "husky install",
-    "format-and-lint": "prettier --write . && eslint . --ext .ts,.js,.cjs --fix"
+    "format-and-lint": "prettier --write . && eslint . --ext .ts,.js,.cjs --fix",
+    "vscode:prepublish": "npm run build && npm run build:native",
+    "package:macos": "npm run build:native -- --required && vsce package --target darwin-arm64 && vsce package --target darwin-x64"
   },
   "repository": {
     "type": "git",
@@ -77,8 +81,10 @@
     "@tsconfig/node22": "^22.0.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.2.1",
+    "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^8.39.0",
     "@typescript-eslint/parser": "^8.39.0",
+    "@vscode/vsce": "^4.1.1",
     "eslint": "^9.33.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-jsonc": "^2.20.1",
@@ -88,7 +94,6 @@
     "jiti": "^2.5.1",
     "lint-staged": "^16.1.5",
     "prettier": "^3.6.2",
-    "@types/vscode": "^1.90.0",
     "ts-jest": "^29.4.1",
     "typescript": "^5.9.2"
   },
