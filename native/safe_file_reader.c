@@ -1,6 +1,7 @@
 #define _DARWIN_C_SOURCE
 #include <node_api.h>
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -12,6 +13,7 @@
 #include <unistd.h>
 
 #define MAX_SAFE_READ_BYTES (16U * 1024U * 1024U)
+#define MAX_SAFE_DIRECTORY_ENTRIES 20000U
 
 static napi_value throw_error(napi_env env, const char *message) {
   napi_throw_error(env, NULL, message);
@@ -65,24 +67,9 @@ static int path_is_within(const char *root_path, const char *file_path) {
          (file_path[root_length] == '\0' || file_path[root_length] == '/');
 }
 
-static int open_workspace_directory(const char *workspace_path) {
-  if (workspace_path[0] != '/') {
-    return -1;
-  }
-
-  int directory_fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (directory_fd < 0) {
-    return -1;
-  }
-
-  char *components = strdup(workspace_path + 1);
-  if (components == NULL) {
-    close_if_open(directory_fd);
-    return -1;
-  }
-
+/* Takes ownership of directory_fd and consumes the mutable path components. */
+static int open_directory_components(int directory_fd, char *components) {
   if (components[0] == '\0') {
-    free(components);
     return directory_fd;
   }
 
@@ -94,27 +81,36 @@ static int open_workspace_directory(const char *workspace_path) {
     }
     if (cursor[0] == '\0' || strcmp(cursor, ".") == 0 || strcmp(cursor, "..") == 0) {
       close_if_open(directory_fd);
-      free(components);
       return -1;
     }
 
     int next_fd = openat(directory_fd, cursor,
                          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (next_fd < 0) {
-      close_if_open(directory_fd);
-      free(components);
-      return -1;
-    }
     close_if_open(directory_fd);
-    directory_fd = next_fd;
-    if (separator == NULL) {
-      break;
+    if (next_fd < 0 || separator == NULL) {
+      return next_fd;
     }
+    directory_fd = next_fd;
     cursor = separator + 1;
   }
+}
 
+static int open_workspace_directory(const char *workspace_path) {
+  if (workspace_path[0] != '/') {
+    return -1;
+  }
+  int directory_fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (directory_fd < 0) {
+    return -1;
+  }
+  char *components = strdup(workspace_path + 1);
+  if (components == NULL) {
+    close_if_open(directory_fd);
+    return -1;
+  }
+  int workspace_fd = open_directory_components(directory_fd, components);
   free(components);
-  return directory_fd;
+  return workspace_fd;
 }
 
 static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
@@ -296,11 +292,111 @@ static napi_value read_workspace_file(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value read_workspace_directory(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc != 3) {
+    return throw_error(env, "Expected workspace path, relative directory, and entry limit.");
+  }
+
+  size_t root_length = 0;
+  size_t relative_length = 0;
+  char *workspace_path = read_string(env, argv[0], &root_length);
+  char *relative_path = read_string(env, argv[1], &relative_length);
+  double limit = 0;
+  if (workspace_path == NULL || relative_path == NULL ||
+      memchr(workspace_path, '\0', root_length) != NULL ||
+      memchr(relative_path, '\0', relative_length) != NULL ||
+      napi_get_value_double(env, argv[2], &limit) != napi_ok ||
+      !isfinite(limit) || limit < 0 || limit > MAX_SAFE_DIRECTORY_ENTRIES ||
+      (double)(uint32_t)limit != limit) {
+    free(workspace_path);
+    free(relative_path);
+    return throw_error(env, "Invalid secure directory reader arguments.");
+  }
+
+  int root_fd = open_workspace_directory(workspace_path);
+  free(workspace_path);
+  int directory_fd = root_fd >= 0 ? dup(root_fd) : -1;
+  if (directory_fd >= 0) {
+    directory_fd = open_directory_components(directory_fd, relative_path);
+  }
+  free(relative_path);
+  if (directory_fd < 0) {
+    close_if_open(root_fd);
+    return throw_error(env, "Unable to open the workspace directory safely.");
+  }
+
+  char root_actual_path[PATH_MAX];
+  char directory_actual_path[PATH_MAX];
+  if (fcntl(root_fd, F_GETPATH, root_actual_path) < 0 ||
+      fcntl(directory_fd, F_GETPATH, directory_actual_path) < 0 ||
+      !path_is_within(root_actual_path, directory_actual_path)) {
+    close_if_open(directory_fd);
+    close_if_open(root_fd);
+    return throw_error(env, "Unable to verify the opened workspace directory.");
+  }
+
+  DIR *directory = fdopendir(directory_fd);
+  if (directory == NULL) {
+    close_if_open(directory_fd);
+    close_if_open(root_fd);
+    return throw_error(env, "Unable to enumerate the opened workspace directory.");
+  }
+
+  napi_value result;
+  if (napi_create_array(env, &result) != napi_ok) {
+    (void)closedir(directory);
+    close_if_open(root_fd);
+    return throw_error(env, "Unable to initialize the directory listing.");
+  }
+
+  bool failed = false;
+  uint32_t count = 0;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(directory);
+    if (entry == NULL) {
+      failed = errno != 0;
+      break;
+    }
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    if (count == (uint32_t)limit) {
+      // Discard oversized listings so provider iteration order cannot change results.
+      failed = napi_get_undefined(env, &result) != napi_ok;
+      break;
+    }
+
+    const char *kind = entry->d_type == DT_REG ? "file" :
+                       entry->d_type == DT_DIR ? "directory" : "unsupported";
+    napi_value item, name, type;
+    if (napi_create_object(env, &item) != napi_ok ||
+        napi_create_string_utf8(env, entry->d_name, NAPI_AUTO_LENGTH, &name) != napi_ok ||
+        napi_create_string_utf8(env, kind, NAPI_AUTO_LENGTH, &type) != napi_ok ||
+        napi_set_named_property(env, item, "name", name) != napi_ok ||
+        napi_set_named_property(env, item, "kind", type) != napi_ok ||
+        napi_set_element(env, result, count, item) != napi_ok) {
+      failed = true;
+      break;
+    }
+    count++;
+  }
+  (void)closedir(directory);
+  close_if_open(root_fd);
+
+  return failed ? throw_error(env, "Unable to enumerate the workspace directory safely.") : result;
+}
+
 static napi_value initialize(napi_env env, napi_value exports) {
   napi_value function;
   if (napi_create_function(env, "readWorkspaceFile", NAPI_AUTO_LENGTH,
                            read_workspace_file, NULL, &function) != napi_ok ||
-      napi_set_named_property(env, exports, "readWorkspaceFile", function) != napi_ok) {
+      napi_set_named_property(env, exports, "readWorkspaceFile", function) != napi_ok ||
+      napi_create_function(env, "readWorkspaceDirectory", NAPI_AUTO_LENGTH,
+                           read_workspace_directory, NULL, &function) != napi_ok ||
+      napi_set_named_property(env, exports, "readWorkspaceDirectory", function) != napi_ok) {
     return throw_error(env, "Unable to initialize the secure macOS file reader.");
   }
   return exports;

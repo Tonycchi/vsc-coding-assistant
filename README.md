@@ -27,6 +27,13 @@ Use **Attach files** in the chat sidebar to include workspace files in your mess
 
 Secure workspace file attachments are supported on Linux and macOS for local `file:` URIs. The macOS extension package includes a universal arm64/x64 native reader. On Windows, remote workspaces, and virtual filesystems, attachment fails closed because the available APIs cannot verify the opened file's workspace boundary safely. Build both macOS VSIX targets on a Mac with Xcode Command Line Tools by running `npm run package:macos`.
 
+### Enable repository tools
+
+Set `vscCodingAssistant.enableRepositoryTools` in your user settings if your OpenRouter
+model supports tool calling. The assistant can request read-only workspace context in trusted
+local macOS and Linux workspaces, and tool results are sent to the configured model provider. When multiple folders
+are open, open a file in the folder you want to use.
+
 ## Development and tests
 
 Use Node.js 22.18.0 (the repository pins this version with Volta), then install the locked dependencies:

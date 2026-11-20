@@ -1,4 +1,12 @@
 import type { ModelProvider } from './ModelProvider';
+import {
+  MAX_TOOL_ARGUMENT_BYTES,
+  MAX_TOOL_CALLS_PER_BATCH,
+  type ModelToolCall,
+  type ModelToolEvent,
+  type ModelToolMessage,
+  type ModelToolRequest,
+} from './toolTypes';
 import type { ModelRequest, ModelResponse } from './types';
 
 export interface OpenRouterConfig {
@@ -9,13 +17,21 @@ export interface OpenRouterConfig {
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+const MAX_REASONING_BYTES = 128_000;
+const MAX_REASONING_BLOCKS = 4_096;
+
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: unknown } }>;
   error?: { message?: unknown };
 }
 
+interface OpenRouterStreamChoice {
+  delta?: { content?: unknown; tool_calls?: unknown; reasoning_details?: unknown };
+  finish_reason?: unknown;
+}
+
 interface OpenRouterStreamResponse {
-  choices?: Array<{ delta?: { content?: unknown } }>;
+  choices?: OpenRouterStreamChoice[];
   error?: { message?: unknown };
 }
 
@@ -36,7 +52,7 @@ async function readRequestError(response: Response): Promise<Error> {
   return new Error(`OpenRouter request failed (${response.status}): ${message}`);
 }
 
-function parseStreamEvent(event: string): { done: boolean; content?: string } {
+function parseStreamEvent(event: string): { done: boolean; choice?: OpenRouterStreamChoice } {
   const data = event
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data:'))
@@ -67,11 +83,13 @@ function parseStreamEvent(event: string): { done: boolean; content?: string } {
     throw new Error(`OpenRouter stream failed: ${message}`);
   }
 
-  const content = payload?.choices?.[0]?.delta?.content;
-  return typeof content === 'string' ? { done: false, content } : { done: false };
+  const choice = payload?.choices?.[0];
+  return choice ? { done: false, choice } : { done: false };
 }
 
-async function* readStream(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
+async function* readStream(
+  body: ReadableStream<Uint8Array>
+): AsyncIterable<OpenRouterStreamChoice> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -97,16 +115,16 @@ async function* readStream(body: ReadableStream<Uint8Array>): AsyncIterable<stri
           completed = true;
           return;
         }
-        if (parsed.content) {
-          yield parsed.content;
+        if (parsed.choice) {
+          yield parsed.choice;
         }
       }
 
       if (result.done) {
         if (buffer.trim()) {
           const parsed = parseStreamEvent(buffer);
-          if (parsed.content) {
-            yield parsed.content;
+          if (parsed.choice) {
+            yield parsed.choice;
           }
         }
         completed = true;
@@ -118,6 +136,74 @@ async function* readStream(body: ReadableStream<Uint8Array>): AsyncIterable<stri
       await reader.cancel().catch(() => undefined);
     }
     reader.releaseLock();
+  }
+}
+
+function toWireToolCall(call: ModelToolCall) {
+  return {
+    id: call.id,
+    type: 'function',
+    function: { name: call.name, arguments: call.arguments },
+  };
+}
+
+function toWireToolMessage(message: ModelToolMessage) {
+  if (message.role === 'tool') {
+    return { role: message.role, content: message.content, tool_call_id: message.toolCallId };
+  }
+  if ('toolCalls' in message) {
+    return {
+      role: message.role,
+      content: message.content || null,
+      tool_calls: message.toolCalls.map(toWireToolCall),
+      ...(message.reasoningDetails ? { reasoning_details: message.reasoningDetails } : {}),
+    };
+  }
+  return message;
+}
+
+interface OpenRouterToolDelta {
+  index?: number;
+  id?: unknown;
+  type?: unknown;
+  function?: { name?: unknown; arguments?: unknown };
+}
+
+function appendToolDeltas(calls: Map<number, ModelToolCall>, deltas: unknown): void {
+  if (!Array.isArray(deltas) || deltas.length > MAX_TOOL_CALLS_PER_BATCH) {
+    throw new Error('OpenRouter returned an invalid tool call batch.');
+  }
+  for (const rawDelta of deltas as Array<OpenRouterToolDelta | null>) {
+    const index = rawDelta?.index;
+    if (
+      index === undefined ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= MAX_TOOL_CALLS_PER_BATCH ||
+      (rawDelta?.type !== undefined && rawDelta.type !== 'function')
+    ) {
+      throw new Error('OpenRouter returned an invalid tool call delta.');
+    }
+
+    const previous = calls.get(index) ?? { id: '', name: '', arguments: '' };
+    const id = rawDelta?.id ?? previous.id;
+    const namePart = rawDelta?.function?.name ?? '';
+    const argumentsPart = rawDelta?.function?.arguments ?? '';
+    if (
+      typeof id !== 'string' ||
+      id.length > 256 ||
+      (previous.id && id !== previous.id) ||
+      typeof namePart !== 'string' ||
+      typeof argumentsPart !== 'string'
+    ) {
+      throw new Error('OpenRouter returned an invalid tool call delta.');
+    }
+    const name = previous.name + namePart;
+    const args = previous.arguments + argumentsPart;
+    if (name.length > 64 || Buffer.byteLength(args) > MAX_TOOL_ARGUMENT_BYTES) {
+      throw new Error('OpenRouter returned an oversized tool call.');
+    }
+    calls.set(index, { id, name, arguments: args });
   }
 }
 
@@ -167,6 +253,90 @@ export class OpenRouterProvider implements ModelProvider {
   }
 
   public async *stream(request: ModelRequest): AsyncIterable<string> {
+    for await (const choice of this.streamChoices(request)) {
+      const content = choice.delta?.content;
+      if (typeof content === 'string' && content) {
+        yield content;
+      }
+    }
+  }
+
+  public async *streamWithTools(request: ModelToolRequest): AsyncIterable<ModelToolEvent> {
+    const calls = new Map<number, ModelToolCall>();
+    let finishedToolCalls = false;
+    let reasoningDetails: unknown[] = [];
+    let reasoningBytes = 0;
+    let invalidReasoning = false;
+
+    for await (const choice of this.streamChoices({
+      messages: request.messages.map(toWireToolMessage),
+      tools: request.tools.map((definition) => ({ type: 'function', function: definition })),
+      tool_choice: request.allowToolCalls ? 'auto' : 'none',
+    })) {
+      const content = choice.delta?.content;
+      if (typeof content === 'string' && content) {
+        yield { type: 'text', content };
+      }
+
+      const reasoning = choice.delta?.reasoning_details;
+      if (request.allowToolCalls && !invalidReasoning && reasoning != null) {
+        if (
+          !Array.isArray(reasoning) ||
+          reasoning.length + reasoningDetails.length > MAX_REASONING_BLOCKS
+        ) {
+          invalidReasoning = true;
+        } else {
+          reasoningBytes += Buffer.byteLength(JSON.stringify(reasoning));
+          if (reasoningBytes > MAX_REASONING_BYTES) {
+            invalidReasoning = true;
+          } else {
+            reasoningDetails.push(...reasoning);
+          }
+        }
+        if (invalidReasoning) {
+          reasoningDetails = [];
+        }
+      }
+      const deltas = choice.delta?.tool_calls;
+      if (deltas !== undefined && deltas !== null) {
+        if (finishedToolCalls || !request.allowToolCalls) {
+          throw new Error('OpenRouter returned unexpected tool calls.');
+        }
+        appendToolDeltas(calls, deltas);
+      }
+      if (choice.finish_reason === 'tool_calls') {
+        finishedToolCalls = true;
+      }
+    }
+
+    if (calls.size > 0 || finishedToolCalls) {
+      const ordered = [...calls.entries()].sort(([first], [second]) => first - second);
+      if (
+        !finishedToolCalls ||
+        ordered.length === 0 ||
+        ordered.some(
+          ([index, call], position) =>
+            index !== position || !call.id || !/^[a-z0-9_-]{1,64}$/i.test(call.name)
+        )
+      ) {
+        throw new Error('OpenRouter returned incomplete tool calls.');
+      }
+      if (invalidReasoning) {
+        throw new Error('OpenRouter returned invalid or oversized reasoning for tool calls.');
+      }
+      yield {
+        type: 'tool-calls',
+        calls: ordered.map(([, call]) => call),
+        ...(reasoningDetails.length > 0 ? { reasoningDetails } : {}),
+      };
+    }
+  }
+
+  private async *streamChoices(request: {
+    messages: readonly object[];
+    tools?: readonly object[];
+    tool_choice?: 'auto' | 'none';
+  }): AsyncIterable<OpenRouterStreamChoice> {
     let response: Response;
     try {
       response = await this.fetch(
@@ -179,7 +349,7 @@ export class OpenRouterProvider implements ModelProvider {
           },
           body: JSON.stringify({
             model: this.config.model,
-            messages: request.messages,
+            ...request,
             stream: true,
           }),
         }
