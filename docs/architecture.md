@@ -410,6 +410,16 @@ Model-facing discovery enumerates bounded listings from verified directory handl
 and macOS. Traversal opens path components without following symbolic links. The same verified source
 serves file discovery and supplies candidate files for text search.
 
+## Workspace edit previews
+
+A preview validates workspace-relative text file creation, replacement, or ordered
+literal patches before reading file contents through the verified workspace reader.
+Each patch fragment must match exactly once. A preview records the exact before
+and after text for each file and a deterministic display diff. The preview rejects
+invalid or oversized text, stale patch fragments, and paths inside `.git`. New
+files require an existing, verified parent directory. The diff shows line ending
+and control character changes explicitly. Building a preview performs no writes.
+
 ---
 
 # Testing Strategy

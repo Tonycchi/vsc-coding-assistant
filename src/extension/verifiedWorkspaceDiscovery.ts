@@ -4,7 +4,11 @@ import path from 'node:path';
 import type * as vscode from 'vscode';
 
 import { loadMacWorkspaceAccess } from '../context/macWorkspaceAccess';
-import { WorkspaceDiscovery, type WorkspaceDirectoryEntry } from '../tools/workspaceDiscovery';
+import {
+  WorkspaceDiscovery,
+  type WorkspaceDirectoryEntry,
+  type WorkspaceDirectorySource,
+} from '../tools/workspaceDiscovery';
 import { workspaceDiscoveryLimits } from '../tools/workspaceDiscoveryPolicy';
 
 interface DirectoryHandle {
@@ -90,7 +94,14 @@ export function createVerifiedWorkspaceDiscovery(
   folder: Pick<vscode.WorkspaceFolder, 'uri'>,
   deps: VerifiedDirectoryDependencies = defaults
 ): WorkspaceDiscovery {
-  return new WorkspaceDiscovery({
+  return new WorkspaceDiscovery(createVerifiedWorkspaceDirectorySource(folder, deps));
+}
+
+export function createVerifiedWorkspaceDirectorySource(
+  folder: Pick<vscode.WorkspaceFolder, 'uri'>,
+  deps: VerifiedDirectoryDependencies = defaults
+): WorkspaceDirectorySource {
+  return {
     async readDirectory(components, maxEntries) {
       if (folder.uri.scheme !== 'file' || !['linux', 'darwin'].includes(deps.platform)) {
         throw new Error('Safe directory discovery requires a local macOS or Linux workspace.');
@@ -114,5 +125,5 @@ export function createVerifiedWorkspaceDiscovery(
         throw new Error('Unable to enumerate the workspace directory safely.');
       }
     },
-  });
+  };
 }
