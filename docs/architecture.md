@@ -278,6 +278,14 @@ each directory listing as an array. Discovery skips conversion and sorting when
 a listing would exceed the remaining entry budget, reports truncation, and keeps
 results from directories already processed.
 
+Workspace text search uses discovery to choose up to 200 eligible files, then reads
+through the same verified file reader as `read_file`. It returns one match per line
+with a 1-based line number for a case-sensitive literal query of 1–200 characters.
+Results and snippets are capped at 200 matches and 300 characters. It reads at
+most a 100 KB prefix per file and 1 MB total, including any probe bytes. The
+response reports whether limits left some content unsearched and counts files
+skipped because they were unreadable or could not be decoded as UTF-8 text.
+
 ## types
 
 Shared TypeScript types.
