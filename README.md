@@ -23,6 +23,8 @@ The extension checks that the key and model setting are present and structurally
 
 ### File attachments
 
+Use **Attach files** in the chat sidebar to include workspace files in your message. Select the remove button beside a file to leave it out before sending.
+
 Secure workspace file attachments are supported on Linux and macOS for local `file:` URIs. The macOS extension package includes a universal arm64/x64 native reader. On Windows, remote workspaces, and virtual filesystems, attachment fails closed because the available APIs cannot verify the opened file's workspace boundary safely. Build both macOS VSIX targets on a Mac with Xcode Command Line Tools by running `npm run package:macos`.
 
 ## Development and tests

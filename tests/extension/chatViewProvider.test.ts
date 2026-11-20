@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode';
 
+import { readWorkspaceFileSafely } from '../../src/context/fileAttachments';
 import { ChatViewProvider } from '../../src/extension/chatViewProvider';
 import type { ModelProvider } from '../../src/models';
 
@@ -216,6 +217,59 @@ describe('ChatViewProvider', () => {
     const request = (provider.stream as jest.Mock).mock.calls[0]?.[0];
     expect(JSON.stringify(request)).toContain(fileContent);
     expect(JSON.stringify(request)).toContain('example.ts');
+  });
+
+  it('removes only the requested attachment from metadata and subsequent prompts', async () => {
+    const removedPath = '/workspace/a/example.ts';
+    const keptPath = '/workspace/b/example.ts';
+    const contents = new Map([
+      [removedPath, 'export const removedValue = 1;'],
+      [keptPath, 'export const keptValue = 2;'],
+    ]);
+    mockVscode.window.showOpenDialog.mockResolvedValue(
+      Array.from(contents.keys(), (filePath) => ({ fsPath: filePath, path: filePath }))
+    );
+    mockVscode.workspace.fs.stat.mockResolvedValue({ size: 30 });
+    for (const content of contents.values()) {
+      jest.mocked(readWorkspaceFileSafely).mockResolvedValueOnce(new TextEncoder().encode(content));
+    }
+    const stream = jest.fn(async function* () {
+      yield 'Answer';
+    });
+    const webview = createWebview();
+    const chatView = new ChatViewProvider(async () => ({ complete: jest.fn(), stream }));
+    chatView.resolveWebviewView(createView(webview));
+    const receiveMessage = getMessageHandler(webview);
+
+    await receiveMessage({ type: 'attach-files' });
+    const attachmentMessages = () =>
+      getPostedMessages(webview).filter(({ type }) => type === 'attachments');
+    expect(attachmentMessages()).toHaveLength(1);
+    expect(attachmentMessages()[0]?.attachments).toEqual([
+      expect.objectContaining({ filePath: removedPath }),
+      expect.objectContaining({ filePath: keptPath }),
+    ]);
+    expect(webview.html).toContain("remove.type = 'button'");
+    expect(webview.html).toContain("'aria-label', 'Remove attachment ' + item.filePath");
+    expect(webview.html).toContain("type: 'remove-attachment', filePath: item.filePath");
+
+    await receiveMessage({ type: 'remove-attachment', filePath: '/workspace/unknown.ts' });
+    expect(attachmentMessages()).toHaveLength(1);
+
+    await receiveMessage({ type: 'remove-attachment', filePath: removedPath });
+    expect(attachmentMessages().at(-1)?.attachments).toEqual([
+      expect.objectContaining({ filePath: keptPath }),
+    ]);
+
+    await receiveMessage({ type: 'send', content: 'Explain the remaining attachment.' });
+    const request = JSON.stringify(stream.mock.calls);
+    expect(request).toContain(keptPath);
+    expect(request).toContain('keptValue');
+    expect(request).not.toContain(removedPath);
+    expect(request).not.toContain('removedValue');
+
+    await receiveMessage({ type: 'remove-attachment', filePath: keptPath });
+    expect(attachmentMessages().at(-1)?.attachments).toEqual([]);
   });
 
   it('shows a clear error and skips reading oversized workspace files', async () => {

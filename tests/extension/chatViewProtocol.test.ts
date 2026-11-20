@@ -16,4 +16,15 @@ describe('parseChatViewMessage', () => {
     expect(parseChatViewMessage(null)).toBeUndefined();
     expect(parseChatViewMessage([])).toBeUndefined();
   });
+
+  it('accepts a removal path and rejects malformed removal messages', () => {
+    const filePath = '/workspace/folder/example.ts';
+    expect(parseChatViewMessage({ type: 'remove-attachment', filePath })).toEqual({
+      type: 'remove-attachment',
+      filePath,
+    });
+    expect(parseChatViewMessage({ type: 'remove-attachment' })).toBeUndefined();
+    expect(parseChatViewMessage({ type: 'remove-attachment', filePath: '' })).toBeUndefined();
+    expect(parseChatViewMessage({ type: 'remove-attachment', filePath: 42 })).toBeUndefined();
+  });
 });
