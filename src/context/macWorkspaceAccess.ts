@@ -17,6 +17,14 @@ interface MacWorkspaceAccess {
     relative: string,
     maxEntries: number
   ): MacWorkspaceDirectoryEntry[] | undefined;
+  applyWorkspaceFile(
+    root: string,
+    rootDevice: bigint,
+    rootInode: bigint,
+    relative: string,
+    before: Buffer | null,
+    after: Buffer
+  ): 'applied' | 'stale';
 }
 
 const requireNativeModule = createRequire(__filename);
