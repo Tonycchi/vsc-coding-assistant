@@ -3,9 +3,53 @@ import type * as vscode from 'vscode';
 import { ChatViewProvider } from '../../src/extension/chatViewProvider';
 import type { ModelProvider } from '../../src/models';
 
-jest.mock('vscode', () => ({ window: { activeTextEditor: undefined } }), { virtual: true });
+jest.mock('../../src/context/fileAttachments', () => {
+  const actual = jest.requireActual('../../src/context/fileAttachments');
+  return {
+    ...actual,
+    readWorkspaceFileSafely: jest.fn(async () =>
+      new TextEncoder().encode('export const value = 1;')
+    ),
+  };
+});
+
+jest.mock(
+  'vscode',
+  () => ({
+    window: { activeTextEditor: undefined, showOpenDialog: jest.fn() },
+    workspace: {
+      workspaceFolders: [{ uri: { fsPath: '/workspace', path: '/workspace' } }],
+      getWorkspaceFolder: jest.fn(),
+      fs: { stat: jest.fn(), readFile: jest.fn() },
+    },
+    Uri: {
+      joinPath: jest.fn((base: { fsPath: string; path: string }, ...segments: string[]) => ({
+        fsPath: [base.fsPath, ...segments].join('/'),
+        path: [base.path, ...segments].join('/'),
+      })),
+    },
+    FileType: { SymbolicLink: 64 },
+  }),
+  { virtual: true }
+);
+
+const mockVscode = jest.requireMock('vscode') as {
+  window: { showOpenDialog: jest.Mock };
+  workspace: {
+    getWorkspaceFolder: jest.Mock;
+    fs: { stat: jest.Mock; readFile: jest.Mock };
+  };
+  Uri: { joinPath: jest.Mock };
+};
 
 describe('ChatViewProvider', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVscode.workspace.getWorkspaceFolder.mockReturnValue({
+      uri: { fsPath: '/workspace', path: '/workspace' },
+    });
+  });
+
   it('streams assistant chunks and restores multi-turn history', async () => {
     const provider: ModelProvider = {
       complete: jest.fn(),
@@ -122,6 +166,131 @@ describe('ChatViewProvider', () => {
     expect(webview.html).toContain("script-src 'nonce-");
     expect(webview.html).toContain('body.textContent = content');
     expect(webview.html).not.toContain('innerHTML');
+  });
+
+  it('attaches selected workspace files, displays metadata, and sends content in the prompt', async () => {
+    const selectedUri = {
+      fsPath: '/workspace/src/example.ts',
+      path: '/workspace/src/example.ts',
+    } as vscode.Uri;
+    const fileContent = 'export const value = 1;';
+    mockVscode.window.showOpenDialog.mockResolvedValue([selectedUri]);
+    mockVscode.workspace.fs.stat.mockResolvedValue({
+      size: new TextEncoder().encode(fileContent).byteLength,
+    });
+    mockVscode.workspace.fs.readFile.mockResolvedValue(new TextEncoder().encode(fileContent));
+    const provider: ModelProvider = {
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {
+        yield 'Attached answer';
+      }),
+    };
+    const webview = createWebview();
+    const chatView = new ChatViewProvider(async () => provider);
+    chatView.resolveWebviewView(createView(webview));
+    const receiveMessage = getMessageHandler(webview);
+
+    await receiveMessage({ type: 'attach-files' });
+
+    expect(mockVscode.window.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canSelectMany: true,
+        canSelectFiles: true,
+        canSelectFolders: false,
+      })
+    );
+    expect(getPostedMessages(webview)).toContainEqual({
+      type: 'attachments',
+      attachments: [
+        {
+          filePath: '/workspace/src/example.ts',
+          fileName: 'example.ts',
+          sizeBytes: new TextEncoder().encode(fileContent).byteLength,
+        },
+      ],
+    });
+    expect(webview.html).toContain('textContent = item.fileName');
+
+    await receiveMessage({ type: 'send', content: 'Explain the attachment.' });
+
+    const request = (provider.stream as jest.Mock).mock.calls[0]?.[0];
+    expect(JSON.stringify(request)).toContain(fileContent);
+    expect(JSON.stringify(request)).toContain('example.ts');
+  });
+
+  it('shows a clear error and skips reading oversized workspace files', async () => {
+    const selectedUri = {
+      fsPath: '/workspace/large.txt',
+      path: '/workspace/large.txt',
+    } as vscode.Uri;
+    mockVscode.window.showOpenDialog.mockResolvedValue([selectedUri]);
+    mockVscode.workspace.fs.stat.mockResolvedValue({ size: 100_001 });
+    const chatView = new ChatViewProvider(async () => ({
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {}),
+    }));
+    const webview = createWebview();
+    chatView.resolveWebviewView(createView(webview));
+
+    await getMessageHandler(webview)({ type: 'attach-files' });
+
+    expect(getPostedMessages(webview)).toContainEqual({
+      type: 'assistant-error',
+      content: 'Attached file "large.txt" exceeds the 100000-byte size limit.',
+    });
+    expect(mockVscode.workspace.fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects files outside the open workspace before reading them', async () => {
+    const selectedUri = { fsPath: '/tmp/external.ts' } as vscode.Uri;
+    mockVscode.window.showOpenDialog.mockResolvedValue([selectedUri]);
+    mockVscode.workspace.getWorkspaceFolder.mockReturnValue(undefined);
+    const chatView = new ChatViewProvider(async () => ({
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {}),
+    }));
+    const webview = createWebview();
+    chatView.resolveWebviewView(createView(webview));
+
+    await getMessageHandler(webview)({ type: 'attach-files' });
+
+    expect(getPostedMessages(webview)).toContainEqual({
+      type: 'assistant-error',
+      content: 'Choose files inside an open workspace.',
+    });
+    expect(mockVscode.workspace.fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('rejects an in-workspace symlink before reading its external target', async () => {
+    const selectedUri = {
+      fsPath: '/workspace/link/secrets.txt',
+      path: '/workspace/link/secrets.txt',
+    } as vscode.Uri;
+    mockVscode.window.showOpenDialog.mockResolvedValue([selectedUri]);
+    mockVscode.workspace.fs.stat.mockImplementation(async (candidate: vscode.Uri) => ({
+      size: 22,
+      type: candidate.fsPath === '/workspace/link' ? 64 : 1,
+    }));
+    mockVscode.workspace.fs.readFile.mockResolvedValue(
+      new TextEncoder().encode('external secret data')
+    );
+    const chatView = new ChatViewProvider(async () => ({
+      complete: jest.fn(),
+      stream: jest.fn(async function* () {}),
+    }));
+    const webview = createWebview();
+    chatView.resolveWebviewView(createView(webview));
+
+    await getMessageHandler(webview)({ type: 'attach-files' });
+
+    expect(getPostedMessages(webview)).toContainEqual({
+      type: 'assistant-error',
+      content: 'Symbolic links cannot be attached. Choose a file stored directly in the workspace.',
+    });
+    expect(mockVscode.workspace.fs.stat).toHaveBeenCalledWith(
+      expect.objectContaining({ fsPath: '/workspace/link' })
+    );
+    expect(mockVscode.workspace.fs.readFile).not.toHaveBeenCalled();
   });
 });
 

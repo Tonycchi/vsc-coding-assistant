@@ -1,4 +1,4 @@
-import type { EditorContext } from '../context';
+import type { EditorContext, FileAttachment } from '../context';
 import type { ModelMessage, ModelProvider } from '../models';
 import type { ChatMessage, ChatSession } from '../types';
 import { buildChatPrompt } from './chatPrompt';
@@ -15,12 +15,13 @@ export async function executeChatTurn(
   session: ChatSession,
   prompt: string,
   provider: ModelProvider,
-  editorContext?: EditorContext
+  editorContext?: EditorContext,
+  attachments: readonly FileAttachment[] = []
 ): Promise<string> {
   session.messages.push({ role: 'user', content: prompt });
 
   const response = await provider.complete({
-    messages: toModelMessages(buildChatPrompt(session, editorContext)),
+    messages: toModelMessages(buildChatPrompt(session, editorContext, attachments)),
   });
 
   session.messages.push({ role: 'assistant', content: response.content });
@@ -32,13 +33,14 @@ export async function* streamChatTurn(
   session: ChatSession,
   prompt: string,
   provider: ModelProvider,
-  editorContext?: EditorContext
+  editorContext?: EditorContext,
+  attachments: readonly FileAttachment[] = []
 ): AsyncIterable<string> {
   session.messages.push({ role: 'user', content: prompt });
 
   let content = '';
   const request = {
-    messages: toModelMessages(buildChatPrompt(session, editorContext)),
+    messages: toModelMessages(buildChatPrompt(session, editorContext, attachments)),
   };
 
   for await (const chunk of provider.stream(request)) {
@@ -52,7 +54,14 @@ export async function* streamChatTurn(
 export async function executeChat(
   prompt: string,
   provider: ModelProvider,
-  editorContext?: EditorContext
+  editorContext?: EditorContext,
+  attachments: readonly FileAttachment[] = []
 ): Promise<string> {
-  return executeChatTurn(createChatSession('interactive-chat'), prompt, provider, editorContext);
+  return executeChatTurn(
+    createChatSession('interactive-chat'),
+    prompt,
+    provider,
+    editorContext,
+    attachments
+  );
 }
